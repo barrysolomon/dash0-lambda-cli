@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# Convenience wrapper for running the CLI without `npm link`.
+#
+# On a fresh clone, this script:
+#   1. verifies Node 20+ is on PATH (AWS SDK v3 dropped Node 18 in Jan 2026)
+#   2. runs `npm ci` if node_modules/ is missing
+#   3. runs `npm run build` if dist/ is missing or any src/*.ts is newer
+#   4. execs node dist/cli.js with whatever args you passed
+set -euo pipefail
+
+here="$(cd "$(dirname "$0")" && pwd)"
+dist="$here/dist/cli.js"
+node_modules="$here/node_modules"
+
+# ─── Node version gate ────────────────────────────────────────────────
+if ! command -v node >/dev/null 2>&1; then
+  echo "node not found on PATH — install Node.js 20 or newer." >&2
+  exit 1
+fi
+node_major=$(node -p 'process.versions.node.split(".")[0]')
+if [[ "$node_major" -lt 20 ]]; then
+  echo "Node $(node -v) is too old. Need Node 20+ (AWS SDK v3 dropped Node 18 in Jan 2026)." >&2
+  echo "Tip: \`nvm use\` from this directory will pick up the included .nvmrc." >&2
+  exit 1
+fi
+
+# ─── Dependencies ─────────────────────────────────────────────────────
+# `npm ci` is the right choice for first-time setup: it's reproducible
+# (uses package-lock.json verbatim) and fast. If node_modules/ already
+# exists we trust it — `npm install` is a separate intentional action
+# users run when they want to bump deps.
+if [[ ! -d "$node_modules" ]]; then
+  echo "→ first run: installing dependencies via npm ci..." >&2
+  (cd "$here" && npm ci --no-audit --no-fund)
+fi
+
+# ─── Build dist/ if stale ─────────────────────────────────────────────
+needs_build() {
+  [[ ! -f "$dist" ]] && return 0
+  newest_src=$(find "$here/src" -type f -name '*.ts' -newer "$dist" -print -quit 2>/dev/null || true)
+  [[ -n "$newest_src" ]]
+}
+
+if needs_build; then
+  echo "→ building (dist/ stale or missing)..." >&2
+  (cd "$here" && npm run --silent build)
+fi
+
+exec node "$dist" "$@"

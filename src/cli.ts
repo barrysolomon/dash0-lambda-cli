@@ -1,0 +1,438 @@
+#!/usr/bin/env node
+// dash0-lambda-cli · © 2026 Barry Solomon · Apache-2.0
+// Unofficial; not affiliated with Dash0 Inc.
+/**
+ * dash0-lambda — manage the Dash0 Lambda extension across your AWS account.
+ *
+ * Subcommands:
+ *   install      attach the layer + set env vars on a function
+ *   uninstall    remove the layer + DASH0_* env vars
+ *   validate     health-check a function (alias: doctor)
+ *   list         list functions and their Dash0/Lumigo footprint (alias: status)
+ *   migrate      replace Lumigo with Dash0 on one or many functions
+ *   generate     emit IaC snippets (terraform | sam | cdk-ts | serverless)
+ *
+ * Global flags resolve from (in order): explicit --flag → env var → default.
+ */
+
+import { Command, Option } from "commander";
+import { install } from "./commands/install.js";
+import { uninstall } from "./commands/uninstall.js";
+import { validate } from "./commands/validate.js";
+import { list } from "./commands/list.js";
+import { migrate } from "./commands/migrate.js";
+import { generate, type IacFlavor } from "./commands/generate.js";
+import { switchVendor } from "./commands/switchVendor.js";
+import { updateLayer } from "./commands/updateLayer.js";
+import type { Vendor } from "./lib/vendor.js";
+import { CliError } from "./lib/errors.js";
+import { fail, info } from "./lib/output.js";
+import {
+  KNOWN_LATEST_LAYER_VERSION,
+  RUNTIME_FAMILIES,
+  type RuntimeFamily,
+} from "./lib/layers.js";
+import { promptDash0Token } from "./lib/prompt.js";
+import { runTui } from "./tui/index.js";
+
+const program = new Command();
+
+program
+  .name("dash0-lambda")
+  .description(
+    "Manage the Dash0 Lambda extension: install, update, validate, migrate from Lumigo, " +
+      "switch vendors, and generate IaC. Run with no arguments to launch the interactive TUI.",
+  )
+  .version("0.1.0")
+  .showHelpAfterError("(use --help for command usage)");
+
+// ─────────────────────────── menu ───────────────────────────
+program
+  .command("menu", { isDefault: true })
+  .description("Launch the interactive menu (default when no subcommand given)")
+  .action(async () => {
+    await runTui();
+  });
+
+// ─────────────────────────── install ───────────────────────────
+program
+  .command("install")
+  .description("Attach the Dash0 layer and set DASH0_* env vars on a function")
+  .requiredOption("-f, --function <name>", "Lambda function name or ARN")
+  .requiredOption("-r, --region <region>", "AWS region", process.env.AWS_REGION)
+  .requiredOption(
+    "-e, --endpoint <url>",
+    "Dash0 OTLP endpoint (e.g. https://ingress.us-west-2.aws.dash0.com:4318)",
+    process.env.DASH0_ENDPOINT,
+  )
+  // Auth
+  .option("-t, --token <token>", "Dash0 auth token", process.env.DASH0_TOKEN)
+  .option(
+    "--token-secret-arn <arn>",
+    "Secrets Manager ARN holding the token (preferred for prod)",
+  )
+  .option(
+    "--token-secret-key <key>",
+    "JSON key inside the secret if it holds an object",
+  )
+  // Common
+  .option("-d, --dataset <name>", "Routes telemetry to a Dash0 dataset")
+  .option(
+    "--service-name <name>",
+    "Sets OTEL_SERVICE_NAME on the function",
+  )
+  .addOption(
+    new Option(
+      "--extension-log-level <level>",
+      "Extension log level (DASH0_EXTENSION_LOG_LEVEL)",
+    ).choices(["trace", "debug", "info", "warn", "error"]),
+  )
+  .option("--distro-debug", "Enable verbose distro debug logs")
+  .option(
+    "--disable-auto-instrumentation",
+    "Disable auto-instrumentation; the extension only emits synthetic traces",
+  )
+  .option(
+    "--no-send-on-invocation-end",
+    "Send telemetry on next invocation instead of on invocation end",
+  )
+  .option(
+    "--xray-traces-enabled",
+    "Set when AWS X-Ray active tracing is enabled on the function",
+  )
+  .option(
+    "--no-create-payload-log-records",
+    "Disable per-invocation request/response payload log records",
+  )
+  .option(
+    "--disable-telemetry-log-collection",
+    "Stop collecting logs from the Lambda Telemetry API",
+  )
+  .option(
+    "--request-timeout-ms <ms>",
+    "HTTP request timeout for OTLP exports",
+    (v) => parseInt(v, 10),
+  )
+  // Masking
+  .option(
+    "--mask-rules <json>",
+    "JSON array of regex patterns; replaces the default mask rules",
+    parseJsonArray,
+  )
+  .option("--mask-env-vars <json>", "JSON array of regex patterns", parseJsonArray)
+  .option("--mask-request-body <json>", "JSON array", parseJsonArray)
+  .option("--mask-request-headers <json>", "JSON array", parseJsonArray)
+  .option("--mask-response-body <json>", "JSON array", parseJsonArray)
+  .option("--mask-response-headers <json>", "JSON array", parseJsonArray)
+  .option("--mask-query-params <json>", "JSON array", parseJsonArray)
+  // Resource & escape hatches
+  .option(
+    "--resource-attribute <key=value...>",
+    "Extra OTEL_RESOURCE_ATTRIBUTES (repeatable)",
+  )
+  .option(
+    "--env <key=value...>",
+    "Set arbitrary env vars on the function (repeatable). Applied last; can override anything above.",
+  )
+  // Layer overrides
+  .addOption(
+    new Option(
+      "--family <family>",
+      "Force a runtime family (skip auto-detect)",
+    ).choices([...RUNTIME_FAMILIES]),
+  )
+  .option("--layer-version <n>", "Pin a layer version", parseInt)
+  .option(
+    "--layer-owner <account>",
+    "Override the layer publisher account (12 digits)",
+    process.env.DASH0_LAYER_OWNER_ACCOUNT,
+  )
+  .option("--dry-run", "Print plan without applying")
+  .action(async (rawOpts) => {
+    // If neither --token nor --token-secret-arn given, prompt interactively.
+    let token = rawOpts.token as string | undefined;
+    if (!token && !rawOpts.tokenSecretArn) {
+      info(
+        "No token or --token-secret-arn provided. Enter a Dash0 token (input will be hidden):",
+      );
+      token = await promptDash0Token();
+    }
+    await install({
+      function: rawOpts.function,
+      region: rawOpts.region,
+      endpoint: rawOpts.endpoint,
+      token,
+      tokenSecretArn: rawOpts.tokenSecretArn,
+      tokenSecretKey: rawOpts.tokenSecretKey,
+      dataset: rawOpts.dataset,
+      serviceName: rawOpts.serviceName,
+      extensionLogLevel: rawOpts.extensionLogLevel,
+      distroDebug: rawOpts.distroDebug,
+      disableAutoInstrumentation: rawOpts.disableAutoInstrumentation,
+      // commander turns --no-send-on-invocation-end into sendOnInvocationEnd:false
+      sendOnInvocationEnd: rawOpts.sendOnInvocationEnd,
+      xrayTracesEnabled: rawOpts.xrayTracesEnabled,
+      createPayloadLogRecords: rawOpts.createPayloadLogRecords,
+      disableTelemetryLogCollection: rawOpts.disableTelemetryLogCollection,
+      requestTimeoutMs: rawOpts.requestTimeoutMs,
+      maskRules: rawOpts.maskRules,
+      maskEnvVars: rawOpts.maskEnvVars,
+      maskRequestBody: rawOpts.maskRequestBody,
+      maskRequestHeaders: rawOpts.maskRequestHeaders,
+      maskResponseBody: rawOpts.maskResponseBody,
+      maskResponseHeaders: rawOpts.maskResponseHeaders,
+      maskQueryParams: rawOpts.maskQueryParams,
+      resourceAttributes: parseKeyValues(rawOpts.resourceAttribute),
+      extraEnv: parseKeyValues(rawOpts.env),
+      family: rawOpts.family as RuntimeFamily | undefined,
+      layerVersion: rawOpts.layerVersion,
+      layerOwner: rawOpts.layerOwner,
+      dryRun: rawOpts.dryRun,
+    });
+  });
+
+// ─────────────────────────── uninstall ───────────────────────────
+program
+  .command("uninstall")
+  .description("Remove the Dash0 layer and DASH0_* env vars from a function")
+  .requiredOption("-f, --function <name>", "Lambda function name or ARN")
+  .requiredOption("-r, --region <region>", "AWS region", process.env.AWS_REGION)
+  .option(
+    "--clear-wrapper",
+    "Also delete AWS_LAMBDA_EXEC_WRAPPER if it points at /opt/wrapper",
+  )
+  .option("--dry-run", "Print plan without applying")
+  .action(async (rawOpts) => {
+    await uninstall({
+      function: rawOpts.function,
+      region: rawOpts.region,
+      clearWrapper: rawOpts.clearWrapper,
+      dryRun: rawOpts.dryRun,
+    });
+  });
+
+// ─────────────────────────── validate / doctor ───────────────────────────
+program
+  .command("validate")
+  .alias("doctor")
+  .description("Health-check a function's Dash0 wiring")
+  .requiredOption("-f, --function <name>", "Lambda function name or ARN")
+  .requiredOption("-r, --region <region>", "AWS region", process.env.AWS_REGION)
+  .option(
+    "--check-logs",
+    "Also tail recent CloudWatch logs to confirm the extension started",
+  )
+  .option(
+    "--logs-lookback <minutes>",
+    "How far back to look at logs",
+    (v) => parseInt(v, 10) * 60_000,
+    15 * 60_000,
+  )
+  .option("--layer-owner <account>", "Override the layer publisher account")
+  .action(async (rawOpts) => {
+    const result = await validate({
+      function: rawOpts.function,
+      region: rawOpts.region,
+      checkLogs: rawOpts.checkLogs,
+      logsLookbackMs: rawOpts.logsLookback,
+      layerOwner: rawOpts.layerOwner,
+    });
+    if (!result.pass) process.exitCode = 4;
+  });
+
+// ─────────────────────────── list / status ───────────────────────────
+program
+  .command("list")
+  .alias("status")
+  .description("List functions and their Dash0/Lumigo footprint")
+  .requiredOption("-r, --region <region>", "AWS region", process.env.AWS_REGION)
+  .option("--filter <substr>", "Substring filter on function name")
+  .option("--only-dash0", "Only functions with Dash0 attached")
+  .option("--only-lumigo", "Only functions running Lumigo")
+  .addOption(
+    new Option("--format <fmt>", "Output format")
+      .choices(["table", "json", "yaml"])
+      .default("table"),
+  )
+  .action(async (rawOpts) => {
+    await list({
+      region: rawOpts.region,
+      filter: rawOpts.filter,
+      onlyDash0: rawOpts.onlyDash0,
+      onlyLumigo: rawOpts.onlyLumigo,
+      format: rawOpts.format,
+    });
+  });
+
+// ─────────────────────────── migrate ───────────────────────────
+program
+  .command("migrate")
+  .description("Replace Lumigo with Dash0 on one or many functions")
+  .option("-f, --function <name>", "Single function (mutually exclusive with --filter)")
+  .option("--filter <regex>", "Regex of function names to migrate")
+  .requiredOption("-r, --region <region>", "AWS region", process.env.AWS_REGION)
+  .requiredOption(
+    "-e, --endpoint <url>",
+    "Dash0 OTLP endpoint",
+    process.env.DASH0_ENDPOINT,
+  )
+  .option("-t, --token <token>", "Dash0 auth token", process.env.DASH0_TOKEN)
+  .option("--token-secret-arn <arn>", "Secrets Manager ARN holding the token")
+  .option("-d, --dataset <name>", "Dash0 dataset")
+  .option(
+    "-c, --concurrency <n>",
+    "Max concurrent updates",
+    (v) => parseInt(v, 10),
+    4,
+  )
+  .option("--layer-version <n>", "Pin a layer version", parseInt)
+  .option("--layer-owner <account>", "Override the layer publisher account")
+  .option("-y, --yes", "Skip the confirmation prompt")
+  .option("--dry-run", "Print plan without applying")
+  .action(async (rawOpts) => {
+    let token = rawOpts.token as string | undefined;
+    if (!token && !rawOpts.tokenSecretArn) {
+      info(
+        "No token or --token-secret-arn provided. Enter a Dash0 token (input will be hidden):",
+      );
+      token = await promptDash0Token();
+    }
+    const outcomes = await migrate({
+      function: rawOpts.function,
+      filter: rawOpts.filter,
+      region: rawOpts.region,
+      endpoint: rawOpts.endpoint,
+      token,
+      tokenSecretArn: rawOpts.tokenSecretArn,
+      dataset: rawOpts.dataset,
+      concurrency: rawOpts.concurrency,
+      layerVersion: rawOpts.layerVersion,
+      layerOwner: rawOpts.layerOwner,
+      yes: rawOpts.yes,
+      dryRun: rawOpts.dryRun,
+    });
+    const failed = outcomes.filter((o) => o.status === "failed").length;
+    if (failed > 0) process.exitCode = 5;
+  });
+
+
+
+// ─────────────────────────── update (layer-only) ──────────────────
+program
+  .command("update")
+  .description(
+    "Bump the attached Dash0 layer to the CLI's known-current version (env vars and other layers untouched)",
+  )
+  .requiredOption("-f, --function <name>", "Lambda function name or ARN")
+  .requiredOption("-r, --region <region>", "AWS region", process.env.AWS_REGION)
+  .option("--layer-version <n>", "Pin a target version", parseInt)
+  .option("--layer-owner <account>", "Override the layer publisher account")
+  .option("--dry-run", "Print plan without applying")
+  .action(async (rawOpts) => {
+    await updateLayer({
+      function: rawOpts.function,
+      region: rawOpts.region,
+      layerVersion: rawOpts.layerVersion,
+      layerOwner: rawOpts.layerOwner,
+      dryRun: rawOpts.dryRun,
+    });
+  });
+
+// ─────────────────────────── switch (Dash0 ↔ Lumigo) ──────────────
+program
+  .command("switch")
+  .description(
+    "Toggle a function between Dash0 and Lumigo by changing AWS_LAMBDA_EXEC_WRAPPER (no layer changes)",
+  )
+  .requiredOption("-f, --function <name>", "Lambda function name or ARN")
+  .requiredOption("-r, --region <region>", "AWS region", process.env.AWS_REGION)
+  .addOption(
+    new Option(
+      "-t, --to <vendor>",
+      "Target vendor — both layers must already be attached",
+    )
+      .choices(["dash0", "lumigo"])
+      .makeOptionMandatory(),
+  )
+  .option("--dry-run", "Print plan without applying")
+  .action(async (rawOpts) => {
+    await switchVendor({
+      function: rawOpts.function,
+      region: rawOpts.region,
+      target: rawOpts.to as Vendor,
+      dryRun: rawOpts.dryRun,
+    });
+  });
+
+// ─────────────────────────── generate ───────────────────────────
+program
+  .command("generate <flavor>")
+  .description("Emit IaC snippets: terraform | sam | cdk-ts | serverless")
+  .requiredOption("-r, --region <region>", "AWS region", process.env.AWS_REGION)
+  .addOption(
+    new Option("--family <family>", "Runtime family")
+      .choices([...RUNTIME_FAMILIES])
+      .default("node"),
+  )
+  .option(
+    "--layer-version <n>",
+    "Layer version to pin (defaults to the CLI's known-latest)",
+    parseInt,
+  )
+  .option("--layer-owner <account>", "Override the layer publisher account")
+  .requiredOption("-e, --endpoint <url>", "Dash0 OTLP endpoint")
+  .option("--token-from-ssm <path>", "SSM parameter path holding the token")
+  .option("-t, --token <token>", "Literal token (discouraged)")
+  .option("-d, --dataset <name>", "Dash0 dataset")
+  .action(async (flavor: string, rawOpts) => {
+    const family = rawOpts.family as RuntimeFamily;
+    const out = generate({
+      flavor: flavor as IacFlavor,
+      region: rawOpts.region,
+      family,
+      layerVersion:
+        rawOpts.layerVersion ?? KNOWN_LATEST_LAYER_VERSION[family],
+      layerOwner: rawOpts.layerOwner,
+      endpoint: rawOpts.endpoint,
+      tokenFromSsm: rawOpts.tokenFromSsm,
+      token: rawOpts.token,
+      dataset: rawOpts.dataset,
+    });
+    process.stdout.write(out);
+  });
+
+// ─────────────────────────── helpers ───────────────────────────
+function parseKeyValues(arr?: string[]): Record<string, string> | undefined {
+  if (!arr || arr.length === 0) return undefined;
+  const out: Record<string, string> = {};
+  for (const pair of arr) {
+    const eq = pair.indexOf("=");
+    if (eq < 0) continue;
+    out[pair.slice(0, eq)] = pair.slice(eq + 1);
+  }
+  return out;
+}
+
+function parseJsonArray(raw: string): string[] {
+  try {
+    const v = JSON.parse(raw);
+    if (!Array.isArray(v) || v.some((x) => typeof x !== "string")) {
+      throw new Error("expected a JSON array of strings");
+    }
+    return v;
+  } catch (err) {
+    throw new Error(
+      `invalid JSON array: ${(err as Error).message}. Example: '[".*token.*"]'`,
+    );
+  }
+}
+
+// ─────────────────────────── main ───────────────────────────
+program.parseAsync(process.argv).catch((err) => {
+  if (err instanceof CliError) {
+    fail(err.message);
+    process.exit(err.exitCode);
+  }
+  fail(err instanceof Error ? err.message : String(err));
+  process.exit(1);
+});

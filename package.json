@@ -1,0 +1,67 @@
+{
+  "name": "dash0-lambda-cli",
+  "version": "0.2.0-dev",
+  "private": true,
+  "description": "Unofficial full-screen TUI for managing the Dash0 Lambda extension across AWS Lambda functions. Not affiliated with Dash0 Inc.",
+  "author": "Barry Solomon",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "dash0-lambda": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/cli.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@aws-sdk/client-cloudwatch-logs": "^3.640.0",
+    "@aws-sdk/client-iam": "^3.640.0",
+    "@aws-sdk/client-lambda": "^3.640.0",
+    "@aws-sdk/client-secrets-manager": "^3.640.0",
+    "@aws-sdk/client-sts": "^3.640.0",
+    "@inquirer/prompts": "^7.0.0",
+    "commander": "^12.1.0",
+    "ink": "^5.0.0",
+    "ink-select-input": "^6.0.0",
+    "ink-spinner": "^5.0.0",
+    "ink-text-input": "^6.0.0",
+    "kleur": "^4.1.5",
+    "ora": "^8.1.0",
+    "react": "^18.3.0",
+    "yaml": "^2.5.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.5.0",
+    "@types/react": "^18.3.0",
+    "aws-sdk-client-mock": "^4.0.1",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.4",
+    "vitest": "^2.0.5"
+  },
+  "keywords": [
+    "dash0",
+    "opentelemetry",
+    "otel",
+    "aws",
+    "lambda",
+    "observability",
+    "tracing",
+    "cli",
+    "lumigo",
+    "tui",
+    "ink"
+  ]
+}
