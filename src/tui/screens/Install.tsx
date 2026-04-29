@@ -1,10 +1,25 @@
 /**
  * Install wizard. Steps: function-pick (if not focused) → endpoint →
- * auth (token / secret-arn) → confirm → apply. Re-uses the underlying
- * install() command function so behavior is identical to the flag CLI.
+ * auth → confirm → apply. Re-uses the underlying install() command
+ * function so behavior is identical to the flag CLI.
  *
- * Output from install() is captured into a small log panel at the bottom
- * so the screen doesn't get clobbered by raw stdout.
+ * The auth step is a tree:
+ *
+ *                ┌─ Use saved Secrets Manager ARN  (saved-secret)
+ *   Saved opts ─┤
+ *                └─ Use saved local token file     (saved-local)
+ *
+ *                ┌─ Paste, save to AWS Secrets Manager  (new-paste-save-secret)
+ *   Enter new ──┼─ Paste, save to local file            (new-paste-save-local)
+ *                ├─ Paste, don't save                    (new-paste-no-save)
+ *                └─ Use existing Secrets Manager ARN     (new-existing-arn)
+ *
+ * "Saved opts" only renders when loadConfig() returned a token reference,
+ * mirroring the empty-section-collapse pattern used on Home.
+ *
+ * After token collection (and optional save), the wizard converges to a
+ * `{ usingSecret, arn?, token? }` shape that feeds install() — there's no
+ * branchy logic past the auth step.
  */
 
 import React, { useEffect, useState } from "react";
@@ -13,21 +28,47 @@ import SelectInput from "ink-select-input";
 import Spinner from "ink-spinner";
 import TextInput from "ink-text-input";
 import { install } from "../../commands/install.js";
-import { loadConfig, saveConfig } from "../../lib/config.js";
+import {
+  loadConfig,
+  loadLocalToken,
+  saveConfig,
+  saveTokenLocally,
+  type SavedConfig,
+} from "../../lib/config.js";
+import { defaultSecretName, saveTokenToSecret } from "../../lib/secrets.js";
 import { resolveTargets, summarizeTargets } from "../lib/targets.js";
 import { captureConsole } from "../lib/captureConsole.js";
+import { runBulk, type BulkResult } from "../lib/bulk.js";
+import { BulkSummary } from "../components/BulkSummary.js";
 import type { ScreenProps } from "../types.js";
 import { useFunctionList } from "../hooks/useFunctionList.js";
+
+type AuthChoice =
+  | "saved-secret"
+  | "saved-local"
+  | "new-paste-save-secret"
+  | "new-paste-save-local"
+  | "new-paste-no-save"
+  | "new-existing-arn";
+
+/** Resolved auth — what install() actually receives. */
+type AuthResolved =
+  | { usingSecret: true; arn: string; secretKey?: string; sourceLabel: string }
+  | { usingSecret: false; token: string; sourceLabel: string };
 
 type Step =
   | "pick-fn"
   | "endpoint"
-  | "auth-method"
-  | "token"
-  | "secret-arn"
+  | "auth-choice"
+  | "auth-token-input"
+  | "auth-arn-input"
+  | "auth-saving"
   | "confirm"
   | "applying"
   | "done"
+  /** Setup-time failure (before bulk apply): bad token, secrets manager
+   *  failed, etc. Not used for per-target install failures — those go to
+   *  the BulkSummary on the "done" screen. */
   | "error";
 
 export const Install: React.FC<ScreenProps> = ({ state, setState }) => {
@@ -38,64 +79,214 @@ export const Install: React.FC<ScreenProps> = ({ state, setState }) => {
   );
   const [fn, setFn] = useState<string | undefined>(resolved.names[0]);
   const [endpoint, setEndpoint] = useState("");
-  const [authMethod, setAuthMethod] = useState<"token" | "secret">("token");
-  const [token, setToken] = useState("");
-  const [secretArn, setSecretArn] = useState("");
-  const [logs, setLogs] = useState<string[]>([]);
+  const [savedCfg, setSavedCfg] = useState<SavedConfig>({});
+  const [authChoice, setAuthChoice] = useState<AuthChoice | undefined>();
+  const [resolvedAuth, setResolvedAuth] = useState<AuthResolved | undefined>();
+  /** What we tell the user we're doing in the "auth-saving" step. */
+  const [savingMessage, setSavingMessage] = useState<string>("");
+  const [bulkRows, setBulkRows] = useState<BulkResult[]>([]);
   const [error, setError] = useState<string | undefined>();
 
   // Load saved defaults on mount.
   useEffect(() => {
     loadConfig().then((cfg) => {
+      setSavedCfg(cfg);
       if (!endpoint && cfg.endpoint) setEndpoint(cfg.endpoint);
-      if (cfg.tokenSecretArn) {
-        setSecretArn(cfg.tokenSecretArn);
-        setAuthMethod("secret");
-      }
     });
   }, []);
 
-  // ESC handled globally by App.
-
   const region = state.region;
 
-  const onSubmit = async () => {
+  /** Drive the post-choice path: maybe collect token, maybe save, then confirm. */
+  const advanceFromChoice = async (choice: AuthChoice) => {
+    setAuthChoice(choice);
+    setError(undefined);
+    if (choice === "saved-secret") {
+      // Already have an ARN saved. Resolve and skip ahead.
+      if (!savedCfg.tokenSecretArn) return;
+      setResolvedAuth({
+        usingSecret: true,
+        arn: savedCfg.tokenSecretArn,
+        secretKey: savedCfg.tokenSecretKey,
+        sourceLabel: "saved Secrets Manager ARN",
+      });
+      setStep("confirm");
+      return;
+    }
+    if (choice === "saved-local") {
+      // Read the local file now so a missing file fails loudly here, not
+      // during apply.
+      if (!savedCfg.tokenLocalFile) return;
+      setStep("auth-saving");
+      setSavingMessage("Reading saved local token…");
+      try {
+        const tok = await loadLocalToken(savedCfg.tokenLocalFile);
+        if (!tok) throw new Error(`local token file is empty or missing: ${savedCfg.tokenLocalFile}`);
+        setResolvedAuth({
+          usingSecret: false,
+          token: tok,
+          sourceLabel: `saved local file (${savedCfg.tokenLocalFile})`,
+        });
+        setStep("confirm");
+      } catch (err) {
+        setError((err as Error).message);
+        setStep("error");
+      }
+      return;
+    }
+    if (choice === "new-existing-arn") {
+      setStep("auth-arn-input");
+      return;
+    }
+    // All "new-paste-*" variants need the token first.
+    setStep("auth-token-input");
+  };
+
+  /** Fired by the token-input form. Branches on what to do with the token. */
+  const onTokenEntered = async (token: string) => {
+    setError(undefined);
+    if (authChoice === "new-paste-no-save") {
+      setResolvedAuth({
+        usingSecret: false,
+        token,
+        sourceLabel: "one-shot (not saved)",
+      });
+      setStep("confirm");
+      return;
+    }
+    if (authChoice === "new-paste-save-local") {
+      setStep("auth-saving");
+      setSavingMessage("Saving token to local file…");
+      try {
+        const { configRelativePath } = await saveTokenLocally(token);
+        await saveConfig({
+          region,
+          endpoint,
+          tokenLocalFile: configRelativePath,
+          // Make sure no stale ARN sticks around.
+          tokenSecretArn: undefined,
+          tokenSecretKey: undefined,
+        });
+        setSavedCfg((c) => ({
+          ...c,
+          tokenLocalFile: configRelativePath,
+          tokenSecretArn: undefined,
+          tokenSecretKey: undefined,
+        }));
+        setResolvedAuth({
+          usingSecret: false,
+          token,
+          sourceLabel: `local file (${configRelativePath})`,
+        });
+        setStep("confirm");
+      } catch (err) {
+        setError((err as Error).message);
+        setStep("error");
+      }
+      return;
+    }
+    if (authChoice === "new-paste-save-secret") {
+      setStep("auth-saving");
+      const name = defaultSecretName({ region });
+      setSavingMessage(`Saving token to AWS Secrets Manager (${name})…`);
+      try {
+        const r = await saveTokenToSecret({
+          region,
+          name,
+          token,
+          shape: "string",
+        });
+        await saveConfig({
+          region,
+          endpoint,
+          tokenSecretArn: r.arn,
+          tokenSecretKey: r.key,
+          tokenLocalFile: undefined,
+        });
+        setSavedCfg((c) => ({
+          ...c,
+          tokenSecretArn: r.arn,
+          tokenSecretKey: r.key,
+          tokenLocalFile: undefined,
+        }));
+        setResolvedAuth({
+          usingSecret: true,
+          arn: r.arn,
+          secretKey: r.key,
+          sourceLabel: r.created
+            ? "newly-created Secrets Manager secret"
+            : "rotated Secrets Manager secret",
+        });
+        setStep("confirm");
+      } catch (err) {
+        setError((err as Error).message);
+        setStep("error");
+      }
+      return;
+    }
+  };
+
+  const onArnEntered = (arn: string) => {
+    setResolvedAuth({
+      usingSecret: true,
+      arn,
+      sourceLabel: "manually-entered ARN",
+    });
+    setStep("confirm");
+  };
+
+  const onApply = async () => {
+    if (!resolvedAuth) return;
     setStep("applying");
-    setLogs([]);
-    // Selection wins; fall back to the wizard-picked single function.
-    const targets =
-      resolved.names.length > 0 ? resolved.names : fn ? [fn] : [];
-    const log = (s: string) => setLogs((prev) => [...prev, s].slice(-60));
+    setBulkRows([]);
+    const targets = resolved.names.length > 0 ? resolved.names : fn ? [fn] : [];
+    // Best-effort bulk: each target gets its own try/catch via runBulk.
+    // One bad target (e.g. invalid IAM role) doesn't abort the rest.
+    // captureConsole swallows printPlan / ok / warn output from install()
+    // so the TUI shows the structured BulkSummary instead of raw logs.
     try {
-      await captureConsole(
-        { onLine: log },
-        async () => {
-          for (const name of targets) {
-            log(`▶ ${name}`);
-            await install({
+      await captureConsole({ onLine: () => undefined }, async () => {
+        await runBulk(
+          targets,
+          (name) =>
+            install({
               function: name,
               region,
               endpoint,
-              token: authMethod === "token" ? token : undefined,
-              tokenSecretArn: authMethod === "secret" ? secretArn : undefined,
-            });
-          }
-          await saveConfig({
-            region,
-            endpoint,
-            tokenSecretArn: authMethod === "secret" ? secretArn : undefined,
-          });
-        },
-      );
+              token: resolvedAuth.usingSecret ? undefined : resolvedAuth.token,
+              tokenSecretArn: resolvedAuth.usingSecret
+                ? resolvedAuth.arn
+                : undefined,
+              tokenSecretKey: resolvedAuth.usingSecret
+                ? resolvedAuth.secretKey
+                : undefined,
+            }).then(() => undefined),
+          setBulkRows,
+        );
+        // Endpoint is non-sensitive and helpful to remember even when the
+        // user picked one-shot auth.
+        await saveConfig({ region, endpoint });
+      });
       setStep("done");
     } catch (err) {
+      // Only thrown by saveConfig (the per-target loop never throws). If
+      // it does fail, we still show whatever bulk rows we accumulated.
       setError((err as Error).message);
-      setStep("error");
+      setStep("done");
     }
   };
 
   // Render per step.
-  if (step === "pick-fn") return <PickFunction state={state} setFn={(name) => { setFn(name); setStep("endpoint"); }} />;
+  if (step === "pick-fn")
+    return (
+      <PickFunction
+        state={state}
+        setFn={(name) => {
+          setFn(name);
+          setStep("endpoint");
+        }}
+      />
+    );
   if (step === "endpoint")
     return (
       <Form
@@ -107,61 +298,55 @@ export const Install: React.FC<ScreenProps> = ({ state, setState }) => {
         }
         onSubmit={(v) => {
           setEndpoint(v);
-          setStep("auth-method");
+          setStep("auth-choice");
         }}
       />
     );
-  if (step === "auth-method")
+  if (step === "auth-choice")
     return (
-      <Pick
-        title="Step 2 of 4 — Authentication"
-        items={[
-          { label: "Token (paste it now, hidden)", value: "token" },
-          { label: "Existing Secrets Manager ARN", value: "secret" },
-        ]}
-        onSelect={(v) => {
-          setAuthMethod(v as "token" | "secret");
-          setStep(v === "token" ? "token" : "secret-arn");
-        }}
+      <AuthChooser
+        savedCfg={savedCfg}
+        onPick={(c) => void advanceFromChoice(c)}
       />
     );
-  if (step === "token")
+  if (step === "auth-token-input")
     return (
       <Form
         title="Step 3 of 4 — Dash0 token"
-        prompt="Token (input is masked):"
+        prompt={tokenPromptFor(authChoice)}
         mask
         validate={(v) =>
           /^auth_[A-Za-z0-9]{32,}$/.test(v.trim())
             ? null
             : "expecting 'auth_' + 32+ chars"
         }
-        onSubmit={(v) => {
-          setToken(v.trim());
-          setStep("confirm");
-        }}
+        onSubmit={(v) => void onTokenEntered(v.trim())}
       />
     );
-  if (step === "secret-arn")
+  if (step === "auth-arn-input")
     return (
       <Form
         title="Step 3 of 4 — Secrets Manager ARN"
         prompt="ARN:"
-        defaultValue={secretArn}
+        defaultValue={savedCfg.tokenSecretArn ?? ""}
         validate={(v) =>
           /^arn:aws:secretsmanager:/.test(v.trim())
             ? null
             : "must be a Secrets Manager ARN"
         }
-        onSubmit={(v) => {
-          setSecretArn(v.trim());
-          setStep("confirm");
-        }}
+        onSubmit={(v) => onArnEntered(v.trim())}
       />
     );
-  if (step === "confirm") {
-    const targets =
-      resolved.names.length > 0 ? resolved.names : fn ? [fn] : [];
+  if (step === "auth-saving")
+    return (
+      <Box flexDirection="column">
+        <Text bold>
+          <Spinner type="dots" /> {savingMessage}
+        </Text>
+      </Box>
+    );
+  if (step === "confirm" && resolvedAuth) {
+    const targets = resolved.names.length > 0 ? resolved.names : fn ? [fn] : [];
     return (
       <Box flexDirection="column">
         <Text bold>Step 4 of 4 — Review</Text>
@@ -178,18 +363,24 @@ export const Install: React.FC<ScreenProps> = ({ state, setState }) => {
           </Text>
           <Text>
             <Text dimColor>auth:</Text>{" "}
-            {authMethod === "token" ? "DASH0_TOKEN" : `DASH0_TOKEN_SECRET_ARN=${secretArn}`}
+            {resolvedAuth.usingSecret
+              ? `DASH0_TOKEN_SECRET_ARN=${resolvedAuth.arn}`
+              : "DASH0_TOKEN (set on each function)"}
           </Text>
+          <Text dimColor>  source: {resolvedAuth.sourceLabel}</Text>
         </Box>
         <Box marginTop={1}>
           <Pick
             title="Apply?"
             items={[
-              { label: "Yes — install on " + targets.length + " function(s)", value: "yes" },
+              {
+                label: `Yes — install on ${targets.length} function(s)`,
+                value: "yes",
+              },
               { label: "No — back to home", value: "no" },
             ]}
             onSelect={(v) => {
-              if (v === "yes") onSubmit();
+              if (v === "yes") void onApply();
               else setState((s) => ({ ...s, screen: "home", back: [] }));
             }}
           />
@@ -197,45 +388,191 @@ export const Install: React.FC<ScreenProps> = ({ state, setState }) => {
       </Box>
     );
   }
-  if (step === "applying" || step === "done" || step === "error") {
+  if (step === "applying" || step === "done") {
     return (
       <Box flexDirection="column">
-        <Text bold>
-          {step === "applying" ? (
-            <>
-              <Spinner type="dots" /> Applying…
-            </>
-          ) : step === "done" ? (
-            <Text color="green">✔ Done</Text>
-          ) : (
-            <Text color="red">✘ Failed: {error}</Text>
-          )}
-        </Text>
-        <Box
-          marginTop={1}
-          flexDirection="column"
-          borderStyle="single"
-          borderColor="gray"
-          paddingX={1}
-        >
-          {logs.length === 0 ? (
-            <Text dimColor>(no output yet)</Text>
-          ) : (
-            logs.map((l, i) => <Text key={i}>{l}</Text>)
-          )}
-        </Box>
-        {(step === "done" || step === "error") && (
+        <BulkSummary
+          title={step === "applying" ? "Installing Dash0…" : "Install complete"}
+          rows={bulkRows}
+          phase={step === "applying" ? "running" : "done"}
+        />
+        {step === "done" && error && (
           <Box marginTop={1}>
-            <Text dimColor>Press </Text>
-            <Text bold>esc</Text>
-            <Text dimColor> to return</Text>
+            <Text color="yellow">! post-step warning: {error}</Text>
           </Box>
         )}
       </Box>
     );
   }
+  if (step === "error") {
+    // Setup-time failure (token save, secrets manager, etc.). Not a
+    // per-target install failure — those land in BulkSummary above.
+    return (
+      <Box flexDirection="column">
+        <Text bold color="red">
+          ✘ {error ?? "Setup failed."}
+        </Text>
+        <Box marginTop={1}>
+          <Text dimColor>
+            Press <Text bold>esc</Text> to return.
+          </Text>
+        </Box>
+      </Box>
+    );
+  }
   return <Text>?</Text>;
 };
+
+function tokenPromptFor(c: AuthChoice | undefined): string {
+  switch (c) {
+    case "new-paste-save-secret":
+      return "Token (will be stored in AWS Secrets Manager):";
+    case "new-paste-save-local":
+      return "Token (will be saved locally at chmod 0600):";
+    case "new-paste-no-save":
+      return "Token (one-shot, not saved):";
+    default:
+      return "Token (input is masked):";
+  }
+}
+
+/**
+ * Sectioned auth chooser. Same hand-rolled list pattern as Home.tsx so
+ * we can mix non-selectable headers + selectable rows. Saved options
+ * collapse to nothing when there's nothing saved.
+ */
+const AuthChooser: React.FC<{
+  savedCfg: SavedConfig;
+  onPick: (c: AuthChoice) => void;
+}> = ({ savedCfg, onPick }) => {
+  const hasSavedSecret = !!savedCfg.tokenSecretArn;
+  const hasSavedLocal = !!savedCfg.tokenLocalFile;
+  const hasAnySaved = hasSavedSecret || hasSavedLocal;
+
+  type Row =
+    | { kind: "header"; label: string }
+    | {
+        kind: "action";
+        label: string;
+        value: AuthChoice;
+        recommended?: boolean;
+        hint?: string;
+      };
+
+  const rows: Row[] = [];
+  if (hasAnySaved) {
+    rows.push({ kind: "header", label: "Saved options" });
+    if (hasSavedSecret) {
+      rows.push({
+        kind: "action",
+        label: `Use saved Secrets Manager ARN`,
+        value: "saved-secret",
+        hint: savedCfg.tokenSecretArn,
+      });
+    }
+    if (hasSavedLocal) {
+      rows.push({
+        kind: "action",
+        label: `Use saved local token file`,
+        value: "saved-local",
+        hint: savedCfg.tokenLocalFile,
+      });
+    }
+  }
+  rows.push({ kind: "header", label: "Enter new" });
+  rows.push({
+    kind: "action",
+    label: "Paste token, save to AWS Secrets Manager",
+    value: "new-paste-save-secret",
+    recommended: true,
+    hint: "Lambda reads the token at runtime via DASH0_TOKEN_SECRET_ARN",
+  });
+  rows.push({
+    kind: "action",
+    label: "Paste token, save to local file",
+    value: "new-paste-save-local",
+    hint: "./.dash0-lambda.token (chmod 0600, auto-gitignored). Token is baked into DASH0_TOKEN env var on the Lambda.",
+  });
+  rows.push({
+    kind: "action",
+    label: "Paste token, don't save",
+    value: "new-paste-no-save",
+    hint: "One-shot — re-enter on the next install.",
+  });
+  rows.push({
+    kind: "action",
+    label: "Use existing Secrets Manager ARN",
+    value: "new-existing-arn",
+    hint: "Paste an ARN you've already created.",
+  });
+
+  const firstSelectable = rows.findIndex((r) => r.kind === "action");
+  const [cursor, setCursor] = useState(firstSelectable);
+
+  useInput((_input, key) => {
+    if (key.upArrow) setCursor((c) => stepCursor(rows, c, -1));
+    if (key.downArrow) setCursor((c) => stepCursor(rows, c, +1));
+    if (key.return) {
+      const r = rows[cursor];
+      if (r?.kind === "action") onPick(r.value);
+    }
+  });
+
+  const focused = rows[cursor];
+  const hint = focused?.kind === "action" ? focused.hint : undefined;
+
+  return (
+    <Box flexDirection="column">
+      <Text bold>Step 2 of 4 — Authentication</Text>
+      <Box marginTop={1} flexDirection="column">
+        {rows.map((r, i) =>
+          r.kind === "header" ? (
+            <Box key={i} marginTop={i === 0 ? 0 : 1}>
+              <Text bold color="cyan">
+                {r.label}
+              </Text>
+            </Box>
+          ) : (
+            <Box key={i} paddingLeft={2}>
+              <Text
+                color={i === cursor ? "cyan" : undefined}
+                bold={i === cursor}
+              >
+                {i === cursor ? "❯ " : "  "}
+                {r.label}
+              </Text>
+              {r.recommended && (
+                <Text color="green" dimColor={i !== cursor}>
+                  {"  ★ recommended"}
+                </Text>
+              )}
+            </Box>
+          ),
+        )}
+      </Box>
+      {hint && (
+        <Box marginTop={1} paddingX={1}>
+          <Text dimColor>{hint}</Text>
+        </Box>
+      )}
+    </Box>
+  );
+};
+
+function stepCursor(
+  rows: Array<{ kind: "header" } | { kind: "action" }>,
+  from: number,
+  direction: -1 | 1,
+): number {
+  const n = rows.length;
+  if (n === 0) return 0;
+  let i = from;
+  for (let steps = 0; steps < n; steps++) {
+    i = (i + direction + n) % n;
+    if (rows[i]?.kind === "action") return i;
+  }
+  return from;
+}
 
 const PickFunction: React.FC<{
   state: import("../types.js").AppState;

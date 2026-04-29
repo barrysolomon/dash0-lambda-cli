@@ -47,7 +47,12 @@ export function useIdentity(region: string): IdentityHookResult {
       })
       .catch((err) => {
         if (cancelled) return;
-        setIdentity({ region });
+        // Leave identity undefined on error. Earlier this set a stub
+        // `{ region }` so that downstream UI could still read region, but
+        // that made `state.identity` truthy when auth had actually failed
+        // — code doing `if (!state.identity)` to detect "no auth" silently
+        // broke. region lives on state.region anyway.
+        setIdentity(undefined);
         setRawError(err instanceof Error ? err : new Error(String(err)));
       })
       .finally(() => {

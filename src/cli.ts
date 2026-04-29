@@ -10,7 +10,7 @@
  *   validate     health-check a function (alias: doctor)
  *   list         list functions and their Dash0/Lumigo footprint (alias: status)
  *   migrate      replace Lumigo with Dash0 on one or many functions
- *   generate     emit IaC snippets (terraform | sam | cdk-ts | serverless)
+ *   generate     emit IaC snippets (terraform | cloudformation | sam | cdk-ts | serverless)
  *
  * Global flags resolve from (in order): explicit --flag → env var → default.
  */
@@ -367,7 +367,7 @@ program
 // ─────────────────────────── generate ───────────────────────────
 program
   .command("generate <flavor>")
-  .description("Emit IaC snippets: terraform | sam | cdk-ts | serverless")
+  .description("Emit IaC snippets: terraform | cloudformation | sam | cdk-ts | serverless")
   .requiredOption("-r, --region <region>", "AWS region", process.env.AWS_REGION)
   .addOption(
     new Option("--family <family>", "Runtime family")

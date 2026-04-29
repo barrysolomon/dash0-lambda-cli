@@ -27,6 +27,8 @@ import {
 import { updateLayer } from "../../commands/updateLayer.js";
 import { resolveTargets } from "../lib/targets.js";
 import { captureConsole } from "../lib/captureConsole.js";
+import { runBulk, type BulkResult } from "../lib/bulk.js";
+import { BulkSummary } from "../components/BulkSummary.js";
 import type { ScreenProps } from "../types.js";
 
 type RowStatus = "loading" | "ready" | "noop" | "blocked" | "downgrade";
@@ -40,7 +42,7 @@ interface PlanRow {
   blocker?: string;
 }
 
-type Stage = "loading" | "review" | "applying" | "done" | "error";
+type Stage = "loading" | "review" | "applying" | "done";
 type Mode = "scan-all" | "targeted";
 
 const PAGE = 14;
@@ -54,7 +56,7 @@ export const UpdateLayer: React.FC<ScreenProps> = ({ state }) => {
   const [rows, setRows] = useState<PlanRow[]>([]);
   const [cursor, setCursor] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [logs, setLogs] = useState<string[]>([]);
+  const [bulkRows, setBulkRows] = useState<BulkResult[]>([]);
   const [error, setError] = useState<string | undefined>();
   const [refreshTick, setRefreshTick] = useState(0);
 
@@ -150,22 +152,28 @@ export const UpdateLayer: React.FC<ScreenProps> = ({ state }) => {
 
   const apply = async () => {
     setStage("applying");
-    setLogs([]);
+    setBulkRows([]);
+    setError(undefined);
+    // Best-effort: per-target try/catch via runBulk. captureConsole hides
+    // the underlying command's stdout — outcomes appear in the BulkSummary.
+    const targets = rows.filter((r) => selected.has(r.name)).map((r) => r.name);
     try {
-      await captureConsole(
-        { onLine: (l) => setLogs((p) => [...p, l].slice(-40)) },
-        async () => {
-          for (const row of rows) {
-            if (!selected.has(row.name)) continue;
-            await updateLayer({ function: row.name, region: state.region });
-          }
-        },
-      );
-      setStage("done");
+      await captureConsole({ onLine: () => undefined }, async () => {
+        await runBulk(
+          targets,
+          (name) =>
+            updateLayer({ function: name, region: state.region }).then(
+              () => undefined,
+            ),
+          setBulkRows,
+        );
+      });
     } catch (e) {
+      // captureConsole / setup failure (not per-target). Surface as a
+      // post-step warning and still show whatever rows we collected.
       setError((e as Error).message);
-      setStage("error");
     }
+    setStage("done");
   };
 
   const visible = useMemo(() => {
@@ -187,33 +195,23 @@ export const UpdateLayer: React.FC<ScreenProps> = ({ state }) => {
     downgrade: rows.filter((r) => r.status === "downgrade").length,
   };
 
-  if (stage === "applying" || stage === "done" || stage === "error") {
+  if (stage === "applying" || stage === "done") {
     return (
       <Box flexDirection="column">
-        <Text bold>
-          {stage === "applying" ? (
-            <>
-              <Spinner type="dots" /> Updating {selected.size} function(s)…
-            </>
-          ) : stage === "done" ? (
-            <Text color="green">✔ Done</Text>
-          ) : (
-            <Text color="red">✘ {error}</Text>
-          )}
-        </Text>
-        <Box
-          marginTop={1}
-          borderStyle="single"
-          borderColor="gray"
-          flexDirection="column"
-          paddingX={1}
-        >
-          {logs.length === 0 ? (
-            <Text dimColor>(no output yet)</Text>
-          ) : (
-            logs.slice(-12).map((l, i) => <Text key={i}>{l}</Text>)
-          )}
-        </Box>
+        <BulkSummary
+          title={
+            stage === "applying"
+              ? `Updating layer (${selected.size} function${selected.size === 1 ? "" : "s"})…`
+              : "Update complete"
+          }
+          rows={bulkRows}
+          phase={stage === "applying" ? "running" : "done"}
+        />
+        {stage === "done" && error && (
+          <Box marginTop={1}>
+            <Text color="yellow">! post-step warning: {error}</Text>
+          </Box>
+        )}
       </Box>
     );
   }
@@ -234,7 +232,7 @@ export const UpdateLayer: React.FC<ScreenProps> = ({ state }) => {
           </Text>
         ) : (
           <Text dimColor>
-            Targeted mode: {incoming.length} function(s) from your selection.
+            Targeted mode: limited to your selection (see banner above).
           </Text>
         )}
       </Text>
@@ -269,7 +267,7 @@ export const UpdateLayer: React.FC<ScreenProps> = ({ state }) => {
         ) : (
           <>
             <Box>
-              <Text>{"  "}</Text>
+              <Text>{"   "}</Text>
               <Text bold>{padR("function", 36)}</Text>
               <Text bold>{padR("family", 8)}</Text>
               <Text bold>{padR("current", 9)}</Text>
@@ -305,7 +303,10 @@ const RowView: React.FC<{
   highlighted: boolean;
   selected: boolean;
 }> = ({ row, highlighted, selected }) => {
-  const marker = selected ? "●" : highlighted ? "❯" : " ";
+  // Cursor and selection live in separate gutter columns — same idiom as
+  // Functions.tsx so muscle memory transfers between screens.
+  const chevron = highlighted ? "❯" : " ";
+  const check = selected ? "☑" : "☐";
   const arrow =
     row.current !== undefined && row.target !== undefined
       ? `→ v${row.target}`
@@ -327,7 +328,13 @@ const RowView: React.FC<{
   return (
     <Box>
       <Text color={highlighted ? "cyan" : undefined} bold={highlighted}>
-        {marker} {padR(row.name, 36)}
+        {chevron}
+      </Text>
+      <Text color={selected ? "magenta" : undefined} bold={selected}>
+        {check}{" "}
+      </Text>
+      <Text color={highlighted ? "cyan" : undefined} bold={highlighted}>
+        {padR(row.name, 36)}
       </Text>
       <Text dimColor>{padR(row.family ?? "—", 8)}</Text>
       <Text>{padR(row.current !== undefined ? `v${row.current}` : "—", 9)}</Text>

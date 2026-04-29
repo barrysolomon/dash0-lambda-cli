@@ -32,6 +32,7 @@ export const Generate: React.FC<ScreenProps> = ({ state }) => {
           <SelectInput
             items={[
               { key: "tf", label: "Terraform", value: "terraform" },
+              { key: "cf", label: "AWS CloudFormation", value: "cloudformation" },
               { key: "sam", label: "AWS SAM", value: "sam" },
               { key: "cdk", label: "AWS CDK (TypeScript)", value: "cdk-ts" },
               { key: "sls", label: "Serverless Framework", value: "serverless" },

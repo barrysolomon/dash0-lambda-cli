@@ -14,7 +14,12 @@ import {
 } from "../lib/layers.js";
 import { ValidationError } from "../lib/errors.js";
 
-export type IacFlavor = "terraform" | "sam" | "cdk-ts" | "serverless";
+export type IacFlavor =
+  | "terraform"
+  | "cloudformation"
+  | "sam"
+  | "cdk-ts"
+  | "serverless";
 
 export interface GenerateOptions {
   flavor: IacFlavor;
@@ -43,6 +48,8 @@ export function generate(opts: GenerateOptions): string {
   switch (opts.flavor) {
     case "terraform":
       return tf(opts, layerArn, wrapper);
+    case "cloudformation":
+      return cloudformation(opts, layerArn, wrapper);
     case "sam":
       return sam(opts, layerArn, wrapper);
     case "cdk-ts":
@@ -93,6 +100,43 @@ ${envBlock.join("\n")}
     }
   }
 }
+`;
+}
+
+function cloudformation(
+  o: GenerateOptions,
+  layerArn: string,
+  wrapper: string | null,
+): string {
+  // Plain CloudFormation (not SAM). Uses AWS::Lambda::Function and the
+  // dynamic-reference syntax for SSM-secure params, which CF resolves at
+  // deploy time without granting the function ssm:GetParameter.
+  const env: string[] = [`          DASH0_ENDPOINT: ${o.endpoint}`];
+  if (wrapper) env.unshift(`          AWS_LAMBDA_EXEC_WRAPPER: ${wrapper}`);
+  if (o.dataset) env.push(`          DASH0_DATASET: ${o.dataset}`);
+  if (o.tokenFromSsm) {
+    env.push(
+      `          DASH0_TOKEN: '{{resolve:ssm-secure:${o.tokenFromSsm}:1}}'`,
+    );
+  } else if (o.token) {
+    env.push(`          DASH0_TOKEN: ${o.token}`);
+  }
+  return `# Dash0 Lambda extension (AWS CloudFormation)
+# ${tokenComment(o)}
+#
+# This snippet uses plain CloudFormation (AWS::Lambda::Function). If you
+# already use SAM macros, prefer the 'sam' flavor instead.
+
+Resources:
+  ExampleFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      # ... your existing properties (FunctionName, Role, Handler, Code, ...) ...
+      Layers:
+        - ${layerArn}
+      Environment:
+        Variables:
+${env.join("\n")}
 `;
 }
 

@@ -30,6 +30,13 @@ export interface FunctionSnapshot {
   env: Record<string, string>;
   role: string;
   lastModified?: string;
+  /**
+   * "Zip" (zip archive deployment) or "Image" (container-image deployment).
+   * Image functions can't have layers attached, so install / update-layer /
+   * uninstall / migrate are all no-ops on them. Surfaced so callers can
+   * filter or warn.
+   */
+  packageType: "Zip" | "Image";
   raw: FunctionConfiguration;
 }
 
@@ -114,6 +121,10 @@ export class LambdaWrapper {
 }
 
 function toSnapshot(fn: FunctionConfiguration): FunctionSnapshot {
+  // PackageType is "Zip" by default for older zip-deployed functions where
+  // the field may be absent — only Image functions reliably set it.
+  const packageType: "Zip" | "Image" =
+    fn.PackageType === "Image" ? "Image" : "Zip";
   return {
     functionName: fn.FunctionName ?? "",
     functionArn: fn.FunctionArn ?? "",
@@ -123,6 +134,7 @@ function toSnapshot(fn: FunctionConfiguration): FunctionSnapshot {
     env: fn.Environment?.Variables ?? {},
     role: fn.Role ?? "",
     lastModified: fn.LastModified,
+    packageType,
     raw: fn,
   };
 }

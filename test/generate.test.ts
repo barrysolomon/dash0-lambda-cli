@@ -21,6 +21,21 @@ describe("generate", () => {
     expect(out).toMatch(/aws_ssm_parameter/);
   });
 
+  it("emits CloudFormation YAML (plain, not SAM)", () => {
+    const out = generate({
+      ...base,
+      flavor: "cloudformation",
+      tokenFromSsm: "/dash0/prod/token",
+    });
+    // Plain CF uses AWS::Lambda::Function, not the SAM higher-level resource.
+    expect(out).toMatch(/AWS::Lambda::Function/);
+    expect(out).not.toMatch(/AWS::Serverless::Function/);
+    expect(out).toMatch(/dash0-extension-node:5/);
+    expect(out).toMatch(/AWS_LAMBDA_EXEC_WRAPPER:\s*\/opt\/wrapper/);
+    // Dynamic-reference syntax for SSM-secure params.
+    expect(out).toMatch(/\{\{resolve:ssm-secure:\/dash0\/prod\/token:1\}\}/);
+  });
+
   it("emits SAM YAML", () => {
     const out = generate({ ...base, flavor: "sam", token: "auth_xxx" });
     expect(out).toMatch(/AWS::Serverless::Function/);

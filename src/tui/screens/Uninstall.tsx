@@ -1,20 +1,18 @@
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import { Box, Text } from "ink";
 import SelectInput from "ink-select-input";
-import Spinner from "ink-spinner";
 import { uninstall } from "../../commands/uninstall.js";
 import type { ScreenProps } from "../types.js";
-import { resolveTargets, summarizeTargets } from "../lib/targets.js";
+import { resolveTargets } from "../lib/targets.js";
 import { captureConsole } from "../lib/captureConsole.js";
+import { runBulk, type BulkResult } from "../lib/bulk.js";
+import { BulkSummary } from "../components/BulkSummary.js";
 
 export const Uninstall: React.FC<ScreenProps> = ({ state, setState }) => {
   // Selection wins (even at size==1) over a single focused row.
   const targets = resolveTargets(state).names;
-  const [stage, setStage] = useState<"confirm" | "running" | "done" | "error">(
-    "confirm",
-  );
-  const [logs, setLogs] = useState<string[]>([]);
-  const [err, setErr] = useState<string | undefined>();
+  const [stage, setStage] = useState<"confirm" | "running" | "done">("confirm");
+  const [bulkRows, setBulkRows] = useState<BulkResult[]>([]);
 
   if (targets.length === 0) {
     return (
@@ -26,20 +24,21 @@ export const Uninstall: React.FC<ScreenProps> = ({ state, setState }) => {
 
   const run = async () => {
     setStage("running");
-    try {
-      await captureConsole(
-        { onLine: (l) => setLogs((p) => [...p, l].slice(-40)) },
-        async () => {
-          for (const name of targets) {
-            await uninstall({ function: name, region: state.region, clearWrapper: true });
-          }
-        },
+    setBulkRows([]);
+    // Best-effort: per-target try/catch via runBulk. The captureConsole
+    // wrapper just keeps the underlying command's stdout from littering
+    // the TUI — outcomes are tracked in bulkRows.
+    await captureConsole({ onLine: () => undefined }, async () => {
+      await runBulk(
+        targets,
+        (name) =>
+          uninstall({ function: name, region: state.region, clearWrapper: true }).then(
+            () => undefined,
+          ),
+        setBulkRows,
       );
-      setStage("done");
-    } catch (e) {
-      setErr((e as Error).message);
-      setStage("error");
-    }
+    });
+    setStage("done");
   };
 
   if (stage === "confirm") {
@@ -62,7 +61,7 @@ export const Uninstall: React.FC<ScreenProps> = ({ state, setState }) => {
               { key: "no", label: "No — back", value: "no" },
             ]}
             onSelect={(i) => {
-              if (i.value === "yes") run();
+              if (i.value === "yes") void run();
               else
                 setState((s) => {
                   const back = [...s.back];
@@ -76,29 +75,10 @@ export const Uninstall: React.FC<ScreenProps> = ({ state, setState }) => {
     );
   }
   return (
-    <Box flexDirection="column">
-      <Text bold>
-        {stage === "running" ? (
-          <>
-            <Spinner type="dots" /> Uninstalling…
-          </>
-        ) : stage === "done" ? (
-          <Text color="green">✔ Done</Text>
-        ) : (
-          <Text color="red">✘ {err}</Text>
-        )}
-      </Text>
-      <Box
-        marginTop={1}
-        borderStyle="single"
-        borderColor="gray"
-        flexDirection="column"
-        paddingX={1}
-      >
-        {logs.map((l, i) => (
-          <Text key={i}>{l}</Text>
-        ))}
-      </Box>
-    </Box>
+    <BulkSummary
+      title={stage === "running" ? "Uninstalling Dash0…" : "Uninstall complete"}
+      rows={bulkRows}
+      phase={stage === "running" ? "running" : "done"}
+    />
   );
 };

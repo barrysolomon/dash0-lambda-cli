@@ -19,6 +19,8 @@ import React, { useEffect, useState } from "react";
 import { Box, Text, useApp, useInput, useStdout } from "ink";
 import { Banner } from "./Banner.js";
 import { Footer } from "./Footer.js";
+import { TargetsBanner, TARGETS_BANNER_HIDDEN_SCREENS } from "./TargetsBanner.js";
+import { resolveTargets } from "./lib/targets.js";
 import { useIdentity } from "./hooks/useIdentity.js";
 import { initialState, type AppState, type Screen } from "./types.js";
 
@@ -121,11 +123,20 @@ export const App: React.FC<{ initialRegion: string }> = ({ initialRegion }) => {
 
   // Layout heights:
   //   banner: 3 rows (top + content + bottom of border)
+  //   targets banner: 3 rows when selection/focus is non-empty AND screen
+  //     wants it shown; 0 otherwise (TargetsBanner returns null).
   //   footer: status (0–1) + hotkey bar (3 rows)
   //   content: everything between
+  const showTargets =
+    !TARGETS_BANNER_HIDDEN_SCREENS.includes(state.screen) &&
+    resolveTargets(state).names.length > 0;
   const footerHeight = state.status ? 4 : 3;
   const bannerHeight = 3;
-  const contentHeight = Math.max(5, rows - bannerHeight - footerHeight);
+  const targetsHeight = showTargets ? 3 : 0;
+  const contentHeight = Math.max(
+    5,
+    rows - bannerHeight - targetsHeight - footerHeight,
+  );
 
   return (
     <Box
@@ -134,6 +145,7 @@ export const App: React.FC<{ initialRegion: string }> = ({ initialRegion }) => {
       height={rows}
     >
       <Banner state={state} />
+      {showTargets && <TargetsBanner state={state} />}
       <Box
         flexDirection="column"
         height={contentHeight}
