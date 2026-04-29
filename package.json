@@ -1,7 +1,6 @@
 {
   "name": "dash0-lambda-cli",
-  "version": "0.2.0-dev",
-  "private": true,
+  "version": "0.3.0",
   "description": "Unofficial full-screen TUI for managing the Dash0 Lambda extension across AWS Lambda functions. Not affiliated with Dash0 Inc.",
   "author": "Barry Solomon",
   "license": "Apache-2.0",
@@ -11,7 +10,6 @@
   },
   "files": [
     "dist",
-    "src",
     "README.md",
     "LICENSE"
   ],
@@ -23,7 +21,9 @@
     "dev": "tsx src/cli.ts",
     "test": "vitest run",
     "test:watch": "vitest",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "prepack": "npm run build && npm test",
+    "release": "scripts/release.sh"
   },
   "dependencies": {
     "@aws-sdk/client-cloudwatch-logs": "^3.640.0",
@@ -63,5 +63,8 @@
     "lumigo",
     "tui",
     "ink"
-  ]
+  ],
+  "optionalDependencies": {
+    "react-devtools-core": "^4.28.5"
+  }
 }

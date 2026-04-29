@@ -14,3 +14,10 @@ vitest.config.ts.timestamp-*.mjs
 # Config screen.
 .dash0-lambda.json
 .dash0-lambda.token
+
+# Release artifacts: scripts/release.sh writes here. Also matches loose
+# tarball / binary outputs from manual `npm pack` or `bun build` at repo
+# root during local smoke testing.
+release/
+dash0-lambda-cli-*.tgz
+dash0-lambda-bun*
