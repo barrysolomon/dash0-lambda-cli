@@ -9,6 +9,7 @@ import {
   GetFunctionConfigurationCommand,
   ListFunctionsCommand,
   ListLayerVersionsCommand,
+  ListTagsCommand,
   UpdateFunctionConfigurationCommand,
   type FunctionConfiguration,
   type Layer,
@@ -37,6 +38,13 @@ export interface FunctionSnapshot {
    * filter or warn.
    */
   packageType: "Zip" | "Image";
+  /**
+   * Resource tags. Populated lazily by callers that need them (the list
+   * API doesn't return tags — it takes a separate `ListTags` call per
+   * ARN). Absent when not yet fetched; empty object when fetched and
+   * the function has no tags.
+   */
+  tags?: Record<string, string>;
   raw: FunctionConfiguration;
 }
 
@@ -117,6 +125,12 @@ export class LambdaWrapper {
   /** Direct passthrough for callers that need package-level details. */
   async getFunctionFull(name: string) {
     return this.client.send(new GetFunctionCommand({ FunctionName: name }));
+  }
+
+  /** Resource tags for a function (keyed by full ARN). */
+  async listTags(arn: string): Promise<Record<string, string>> {
+    const out = await this.client.send(new ListTagsCommand({ Resource: arn }));
+    return out.Tags ?? {};
   }
 }
 

@@ -45,11 +45,23 @@ export const SwitchRegion: React.FC<ScreenProps> = ({ state, setState }) => {
             setState((s) => {
               const back = [...s.back];
               const prev = back.pop() ?? "home";
+              // Selection is keyed by function name and scoped to the
+              // previous region — those names refer to different
+              // Lambdas in the new region (or don't exist at all). Drop
+              // the selection on a real region change so the next
+              // bulk action can't fire against a phantom set. Same
+              // reasoning for `focused`. We skip the wipe when the
+              // user re-picks their current region (a no-op).
+              if (item.value === s.region) {
+                return { ...s, screen: prev, back };
+              }
               return {
                 ...s,
                 region: item.value,
                 screen: prev,
                 back,
+                selected: new Set<string>(),
+                focused: undefined,
                 status: { text: `Region → ${item.value}`, tone: "ok" },
               };
             });
