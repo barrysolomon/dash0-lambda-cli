@@ -16,6 +16,7 @@
  */
 
 import { Command, Option } from "commander";
+import pkg from "../package.json" with { type: "json" };
 import { install } from "./commands/install.js";
 import { uninstall } from "./commands/uninstall.js";
 import { validate } from "./commands/validate.js";
@@ -44,7 +45,7 @@ program
     "Manage the Dash0 Lambda extension: install, update, validate, migrate from Lumigo, " +
       "switch vendors, and generate IaC. Run with no arguments to launch the interactive TUI.",
   )
-  .version("0.1.0")
+  .version(pkg.version)
   .showHelpAfterError("(use --help for command usage)");
 
 // ─────────────────────────── menu ───────────────────────────
