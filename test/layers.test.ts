@@ -34,9 +34,9 @@ describe("buildLayerArn", () => {
         region: "us-west-2",
         ownerAccount: CANONICAL_OWNER_ACCOUNT,
         family: "node",
-        version: 5,
+        version: 6,
       }),
-    ).toBe("arn:aws:lambda:us-west-2:115813213817:layer:dash0-extension-node:5");
+    ).toBe("arn:aws:lambda:us-west-2:115813213817:layer:dash0-extension-node:6");
   });
   it("supports rehosted owners", () => {
     expect(
@@ -62,13 +62,13 @@ describe("buildLayerArn", () => {
 describe("parseDash0LayerArn", () => {
   it("recognizes canonical ARNs", () => {
     const c = parseDash0LayerArn(
-      "arn:aws:lambda:us-west-2:115813213817:layer:dash0-extension-node:5",
+      "arn:aws:lambda:us-west-2:115813213817:layer:dash0-extension-node:6",
     );
     expect(c).toEqual({
       region: "us-west-2",
       ownerAccount: CANONICAL_OWNER_ACCOUNT,
       family: "node",
-      version: 5,
+      version: 6,
     });
   });
   it("recognizes rehosted ARNs", () => {
@@ -94,11 +94,11 @@ describe("KNOWN_LATEST_LAYER_VERSION", () => {
       expect(KNOWN_LATEST_LAYER_VERSION[fam]).toBeGreaterThan(0);
     }
   });
-  it("currently pins v5 across the board (bump when Dash0 ships a new release)", () => {
-    expect(KNOWN_LATEST_LAYER_VERSION.node).toBe(5);
-    expect(KNOWN_LATEST_LAYER_VERSION.python).toBe(5);
-    expect(KNOWN_LATEST_LAYER_VERSION.java).toBe(5);
-    expect(KNOWN_LATEST_LAYER_VERSION.manual).toBe(5);
+  it("currently pins v6 across the board (bump when Dash0 ships a new release)", () => {
+    expect(KNOWN_LATEST_LAYER_VERSION.node).toBe(6);
+    expect(KNOWN_LATEST_LAYER_VERSION.python).toBe(6);
+    expect(KNOWN_LATEST_LAYER_VERSION.java).toBe(6);
+    expect(KNOWN_LATEST_LAYER_VERSION.manual).toBe(6);
   });
 });
 

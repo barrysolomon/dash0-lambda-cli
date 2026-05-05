@@ -35,6 +35,8 @@ export interface InstallOptions {
   token?: string;
   tokenSecretArn?: string;
   tokenSecretKey?: string;
+  /** When set, enforce exclusivity and clear the other auth env var. */
+  authMode?: "token" | "secret";
 
   // Common knobs
   dataset?: string;
@@ -118,6 +120,17 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
   if (wrapperPath) dash0Env.AWS_LAMBDA_EXEC_WRAPPER = wrapperPath;
   const desiredEnv = mergeEnv(fn.env, dash0Env);
 
+  // Auth-mode exclusivity: when an explicit mode is pinned, scrub the
+  // env var for the *other* shape so the two can never coexist on the
+  // function. (Per the extension docs DASH0_TOKEN wins silently if both
+  // are set — this prevents that footgun.)
+  if (cfg.authMode === "token") {
+    delete desiredEnv.DASH0_TOKEN_SECRET_ARN;
+    delete desiredEnv.DASH0_TOKEN_SECRET_KEY;
+  } else if (cfg.authMode === "secret") {
+    delete desiredEnv.DASH0_TOKEN;
+  }
+
   // 5. Print plan.
   printPlan({
     function: opts.function,
@@ -165,6 +178,7 @@ function parseConfig(opts: InstallOptions): Dash0InstallConfig {
     token: opts.token,
     tokenSecretArn: opts.tokenSecretArn,
     tokenSecretKey: opts.tokenSecretKey,
+    authMode: opts.authMode,
     dataset: opts.dataset,
     serviceName: opts.serviceName,
     extensionLogLevel: opts.extensionLogLevel,

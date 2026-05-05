@@ -55,6 +55,54 @@ describe("Dash0InstallConfigSchema", () => {
     });
     expect(r.success).toBe(true);
   });
+  it("authMode=token requires token and forbids tokenSecretArn", () => {
+    expect(
+      Dash0InstallConfigSchema.safeParse({
+        endpoint: ENDPOINT,
+        token: VALID_TOKEN,
+        authMode: "token",
+      }).success,
+    ).toBe(true);
+    expect(
+      Dash0InstallConfigSchema.safeParse({
+        endpoint: ENDPOINT,
+        token: VALID_TOKEN,
+        tokenSecretArn: SECRET_ARN,
+        authMode: "token",
+      }).success,
+    ).toBe(false);
+    expect(
+      Dash0InstallConfigSchema.safeParse({
+        endpoint: ENDPOINT,
+        tokenSecretArn: SECRET_ARN,
+        authMode: "token",
+      }).success,
+    ).toBe(false);
+  });
+  it("authMode=secret requires tokenSecretArn and forbids token", () => {
+    expect(
+      Dash0InstallConfigSchema.safeParse({
+        endpoint: ENDPOINT,
+        tokenSecretArn: SECRET_ARN,
+        authMode: "secret",
+      }).success,
+    ).toBe(true);
+    expect(
+      Dash0InstallConfigSchema.safeParse({
+        endpoint: ENDPOINT,
+        token: VALID_TOKEN,
+        tokenSecretArn: SECRET_ARN,
+        authMode: "secret",
+      }).success,
+    ).toBe(false);
+    expect(
+      Dash0InstallConfigSchema.safeParse({
+        endpoint: ENDPOINT,
+        token: VALID_TOKEN,
+        authMode: "secret",
+      }).success,
+    ).toBe(false);
+  });
   it("rejects malformed endpoint", () => {
     const r = Dash0InstallConfigSchema.safeParse({
       endpoint: "ingress.us-west-2.aws.dash0.com",

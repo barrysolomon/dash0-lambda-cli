@@ -9,10 +9,13 @@
  *   Saved opts ─┤
  *                └─ Use saved local token file     (saved-local)
  *
- *                ┌─ Paste, save to AWS Secrets Manager  (new-paste-save-secret)
- *   Enter new ──┼─ Paste, save to local file            (new-paste-save-local)
- *                ├─ Paste, don't save                    (new-paste-no-save)
- *                └─ Use existing Secrets Manager ARN     (new-existing-arn)
+ *   Use Secrets Manager  (sets DASH0_TOKEN_SECRET_ARN on the function)
+ *                ├─ Paste token, save to AWS Secrets Manager  (new-paste-save-secret)
+ *                └─ Use existing Secrets Manager ARN          (new-existing-arn)
+ *
+ *   Use literal env var  (sets DASH0_TOKEN on the function)
+ *                ├─ Paste, save to local file                 (new-paste-save-local)
+ *                └─ Paste, don't save                         (new-paste-no-save)
  *
  * "Saved opts" only renders when loadConfig() returned a token reference,
  * mirroring the empty-section-collapse pattern used on Home.
@@ -479,31 +482,38 @@ const AuthChooser: React.FC<{
       });
     }
   }
-  rows.push({ kind: "header", label: "Enter new" });
+  rows.push({
+    kind: "header",
+    label: "Use Secrets Manager  (function reads DASH0_TOKEN_SECRET_ARN at runtime)",
+  });
   rows.push({
     kind: "action",
     label: "Paste token, save to AWS Secrets Manager",
     value: "new-paste-save-secret",
     recommended: true,
-    hint: "Lambda reads the token at runtime via DASH0_TOKEN_SECRET_ARN",
-  });
-  rows.push({
-    kind: "action",
-    label: "Paste token, save to local file",
-    value: "new-paste-save-local",
-    hint: "./.dash0-lambda.token (chmod 0600, auto-gitignored). Token is baked into DASH0_TOKEN env var on the Lambda.",
-  });
-  rows.push({
-    kind: "action",
-    label: "Paste token, don't save",
-    value: "new-paste-no-save",
-    hint: "One-shot — re-enter on the next install.",
+    hint: "Creates/rotates a secret. Sets DASH0_TOKEN_SECRET_ARN on the function. Function role needs secretsmanager:GetSecretValue.",
   });
   rows.push({
     kind: "action",
     label: "Use existing Secrets Manager ARN",
     value: "new-existing-arn",
-    hint: "Paste an ARN you've already created.",
+    hint: "Paste an ARN you've already created. Sets DASH0_TOKEN_SECRET_ARN on the function.",
+  });
+  rows.push({
+    kind: "header",
+    label: "Use literal env var  (sets DASH0_TOKEN directly on the function)",
+  });
+  rows.push({
+    kind: "action",
+    label: "Paste token, save to local file (DASH0_TOKEN)",
+    value: "new-paste-save-local",
+    hint: "Saves to ./.dash0-lambda.token (chmod 0600, auto-gitignored) for next time. Sets DASH0_TOKEN on the Lambda.",
+  });
+  rows.push({
+    kind: "action",
+    label: "Paste token, don't save (DASH0_TOKEN, one-shot)",
+    value: "new-paste-no-save",
+    hint: "Re-enter on the next install. Sets DASH0_TOKEN on the Lambda; nothing persisted on your machine.",
   });
 
   const firstSelectable = rows.findIndex((r) => r.kind === "action");

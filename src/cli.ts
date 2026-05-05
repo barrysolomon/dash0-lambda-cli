@@ -24,6 +24,7 @@ import { migrate } from "./commands/migrate.js";
 import { generate, type IacFlavor } from "./commands/generate.js";
 import { switchVendor } from "./commands/switchVendor.js";
 import { updateLayer } from "./commands/updateLayer.js";
+import { secretShow } from "./commands/secret.js";
 import type { Vendor } from "./lib/vendor.js";
 import { CliError } from "./lib/errors.js";
 import { fail, info } from "./lib/output.js";
@@ -74,6 +75,12 @@ program
   .option(
     "--token-secret-key <key>",
     "JSON key inside the secret if it holds an object",
+  )
+  .addOption(
+    new Option(
+      "--auth-mode <mode>",
+      "Pin auth mode and clear the other env var on the function (token wins silently if both are set)",
+    ).choices(["token", "secret"]),
   )
   // Common
   .option("-d, --dataset <name>", "Routes telemetry to a Dash0 dataset")
@@ -164,6 +171,7 @@ program
       token,
       tokenSecretArn: rawOpts.tokenSecretArn,
       tokenSecretKey: rawOpts.tokenSecretKey,
+      authMode: rawOpts.authMode as "token" | "secret" | undefined,
       dataset: rawOpts.dataset,
       serviceName: rawOpts.serviceName,
       extensionLogLevel: rawOpts.extensionLogLevel,
@@ -229,6 +237,15 @@ program
     15 * 60_000,
   )
   .option("--layer-owner <account>", "Override the layer publisher account")
+  .option(
+    "--no-check-secret",
+    "Skip Secrets Manager / IAM reachability checks for DASH0_TOKEN_SECRET_ARN",
+  )
+  .option(
+    "--show-token",
+    "Print the resolved token (redacted) — pass --reveal-token to see it in full",
+  )
+  .option("--reveal-token", "When --show-token is set, print the full token")
   .action(async (rawOpts) => {
     const result = await validate({
       function: rawOpts.function,
@@ -236,8 +253,34 @@ program
       checkLogs: rawOpts.checkLogs,
       logsLookbackMs: rawOpts.logsLookback,
       layerOwner: rawOpts.layerOwner,
+      checkSecret: rawOpts.checkSecret,
+      showToken: rawOpts.showToken,
+      revealToken: rawOpts.revealToken,
     });
     if (!result.pass) process.exitCode = 4;
+  });
+
+// ─────────────────────────── secret show ───────────────────────────
+const secret = program
+  .command("secret")
+  .description("Inspect Secrets Manager values backing DASH0_TOKEN_SECRET_ARN");
+
+secret
+  .command("show")
+  .description("Read and print the Dash0 token from a function's secret")
+  .requiredOption("-r, --region <region>", "AWS region", process.env.AWS_REGION)
+  .option("-f, --function <name>", "Function whose DASH0_TOKEN_SECRET_ARN to read")
+  .option("--secret-arn <arn>", "Read this secret directly (skip the function lookup)")
+  .option("--secret-key <key>", "JSON key inside the secret (default: from function env)")
+  .option("--reveal", "Print the full token instead of a redacted preview")
+  .action(async (rawOpts) => {
+    await secretShow({
+      region: rawOpts.region,
+      function: rawOpts.function,
+      secretArn: rawOpts.secretArn,
+      secretKey: rawOpts.secretKey,
+      reveal: rawOpts.reveal,
+    });
   });
 
 // ─────────────────────────── list / status ───────────────────────────

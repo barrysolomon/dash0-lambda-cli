@@ -46,9 +46,9 @@ describe("install", () => {
     });
 
     expect(r.applied).toBe(true);
-    // KNOWN_LATEST_LAYER_VERSION.node is 5 — pinned in src/lib/layers.ts.
+    // KNOWN_LATEST_LAYER_VERSION.node is 6 — pinned in src/lib/layers.ts.
     expect(r.layerArn).toBe(
-      "arn:aws:lambda:us-west-2:115813213817:layer:dash0-extension-node:5",
+      "arn:aws:lambda:us-west-2:115813213817:layer:dash0-extension-node:6",
     );
     expect(r.envAfter.DB_URL).toBe("postgres://x"); // preserved
     expect(r.envAfter.DASH0_ENDPOINT).toBe(ENDPOINT);
@@ -63,7 +63,7 @@ describe("install", () => {
     const calls = lambdaMock.commandCalls(UpdateFunctionConfigurationCommand);
     expect(calls).toHaveLength(1);
     const sentLayers = calls[0]!.args[0].input.Layers ?? [];
-    expect(sentLayers[0]).toContain("dash0-extension-node:5");
+    expect(sentLayers[0]).toContain("dash0-extension-node:6");
   });
 
   it("preserves non-Dash0 layers and pre-existing env", async () => {
@@ -129,6 +129,74 @@ describe("install", () => {
     });
     expect(r.applied).toBe(false);
     expect(lambdaMock.commandCalls(UpdateFunctionConfigurationCommand)).toHaveLength(0);
+  });
+
+  it("authMode=token clears DASH0_TOKEN_SECRET_ARN that pre-existed on the function", async () => {
+    lambdaMock.on(GetFunctionConfigurationCommand).resolves({
+      FunctionName: "fn",
+      Runtime: "nodejs20.x",
+      Architectures: ["x86_64"],
+      Layers: [],
+      Environment: {
+        Variables: {
+          DASH0_TOKEN_SECRET_ARN:
+            "arn:aws:secretsmanager:us-west-2:111:secret:old-AaBb",
+          DASH0_TOKEN_SECRET_KEY: "dash0_token",
+        },
+      },
+      Role: "arn:aws:iam::111:role/fn",
+    });
+    lambdaMock.on(UpdateFunctionConfigurationCommand).resolves({});
+
+    const wrapper = new LambdaWrapper({
+      region: "us-west-2",
+      client: lambdaMock as unknown as LambdaClient,
+    });
+    await install({
+      function: "fn",
+      region: "us-west-2",
+      endpoint: ENDPOINT,
+      token: VALID_TOKEN,
+      authMode: "token",
+      lambda: wrapper,
+    });
+    const sent =
+      lambdaMock.commandCalls(UpdateFunctionConfigurationCommand)[0]!.args[0]
+        .input.Environment?.Variables ?? {};
+    expect(sent.DASH0_TOKEN).toBe(VALID_TOKEN);
+    expect(sent.DASH0_TOKEN_SECRET_ARN).toBeUndefined();
+    expect(sent.DASH0_TOKEN_SECRET_KEY).toBeUndefined();
+  });
+
+  it("authMode=secret clears a pre-existing DASH0_TOKEN", async () => {
+    lambdaMock.on(GetFunctionConfigurationCommand).resolves({
+      FunctionName: "fn",
+      Runtime: "nodejs20.x",
+      Architectures: ["x86_64"],
+      Layers: [],
+      Environment: { Variables: { DASH0_TOKEN: "auth_legacy_value" } },
+      Role: "arn:aws:iam::111:role/fn",
+    });
+    lambdaMock.on(UpdateFunctionConfigurationCommand).resolves({});
+
+    const wrapper = new LambdaWrapper({
+      region: "us-west-2",
+      client: lambdaMock as unknown as LambdaClient,
+    });
+    await install({
+      function: "fn",
+      region: "us-west-2",
+      endpoint: ENDPOINT,
+      tokenSecretArn:
+        "arn:aws:secretsmanager:us-west-2:111:secret:dash0-token-AaBb",
+      authMode: "secret",
+      lambda: wrapper,
+    });
+    const sent =
+      lambdaMock.commandCalls(UpdateFunctionConfigurationCommand)[0]!.args[0]
+        .input.Environment?.Variables ?? {};
+    expect(sent.DASH0_TOKEN).toBeUndefined();
+    expect(sent.DASH0_TOKEN_SECRET_ARN).toContain("secret:dash0-token-AaBb");
   });
 
   it("rejects bad config before any AWS calls", async () => {

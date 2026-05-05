@@ -79,6 +79,15 @@ export const Dash0InstallConfigSchema = z
       .optional(),
     /** JSON key inside the secret if the secret holds a JSON object. */
     tokenSecretKey: z.string().min(1).optional(),
+    /**
+     * Optional explicit auth mode. When set, exactly one of token/secret
+     * must be provided AND install will clear the other env var on the
+     * function so the two can never coexist.
+     *
+     * Per the extension docs DASH0_TOKEN takes precedence over
+     * DASH0_TOKEN_SECRET_ARN; pinning a mode prevents accidental wins.
+     */
+    authMode: z.enum(["token", "secret"]).optional(),
 
     /** Routes OTLP exports to the named dataset in Dash0. */
     dataset: z.string().min(1).max(100).optional(),
@@ -123,7 +132,21 @@ export const Dash0InstallConfigSchema = z
   })
   .refine((c) => !c.tokenSecretKey || !!c.tokenSecretArn, {
     message: "--token-secret-key requires --token-secret-arn",
-  });
+  })
+  .refine(
+    (c) => c.authMode !== "token" || (!!c.token && !c.tokenSecretArn),
+    {
+      message:
+        "--auth-mode token requires --token and forbids --token-secret-arn",
+    },
+  )
+  .refine(
+    (c) => c.authMode !== "secret" || (!!c.tokenSecretArn && !c.token),
+    {
+      message:
+        "--auth-mode secret requires --token-secret-arn and forbids --token",
+    },
+  );
 
 export type Dash0InstallConfig = z.infer<typeof Dash0InstallConfigSchema>;
 

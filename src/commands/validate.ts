@@ -28,6 +28,11 @@ import {
   wrapperPathFor,
 } from "../lib/layers.js";
 import { c, fail, info, ok, warn } from "../lib/output.js";
+import {
+  inspectSecret,
+  simulateLambdaSecretAccess,
+  type InspectSecretResult,
+} from "../lib/secrets.js";
 
 export interface ValidateOptions {
   function: string;
@@ -37,6 +42,18 @@ export interface ValidateOptions {
   checkLogs?: boolean;
   /** Lookback window for log check, ms. */
   logsLookbackMs?: number;
+  /**
+   * When DASH0_TOKEN_SECRET_ARN is set, fetch the secret with the CLI's
+   * creds and (best-effort) simulate whether the function's role can
+   * read it. Defaults to true.
+   */
+  checkSecret?: boolean;
+  /**
+   * Print the resolved token (from DASH0_TOKEN or by reading the secret).
+   * Redacted by default; pass revealToken=true for the full value.
+   */
+  showToken?: boolean;
+  revealToken?: boolean;
   lambda?: LambdaWrapper;
   logs?: CloudWatchLogsClient;
 }
@@ -210,6 +227,110 @@ export async function validate(opts: ValidateOptions): Promise<ValidateResult> {
     });
   }
 
+  // 4b. Reachability/shape of the Secrets Manager value, if used. This is
+  // exactly the failure mode where the env var is set but the function's
+  // role can't actually call GetSecretValue (or the secret doesn't exist
+  // / is in another region / has a CMK the role can't decrypt).
+  let secretInspect: InspectSecretResult | undefined;
+  if (hasSecret && opts.checkSecret !== false) {
+    const arn = fn.env.DASH0_TOKEN_SECRET_ARN!;
+    const key = fn.env.DASH0_TOKEN_SECRET_KEY;
+    secretInspect = await inspectSecret({
+      region: opts.region,
+      arn,
+      key,
+    });
+    if (!secretInspect.exists) {
+      checks.push({
+        name: "secret-exists",
+        level: "fail",
+        message:
+          secretInspect.errorCode === "NotFound"
+            ? `secret ${arn} not found in ${opts.region}`
+            : `couldn't describe secret (${secretInspect.errorCode}): ${secretInspect.errorMessage}`,
+        fix:
+          secretInspect.errorCode === "AccessDenied"
+            ? "the CLI's creds can't see the secret — your function's role likely can't either"
+            : `verify the ARN and that it lives in ${opts.region}`,
+      });
+    } else {
+      checks.push({
+        name: "secret-exists",
+        level: "ok",
+        message: `secret resolves${secretInspect.kmsKeyId ? ` (CMK: ${secretInspect.kmsKeyId})` : ""}`,
+      });
+
+      if (secretInspect.errorCode) {
+        // Got past Describe but reading/parsing the value failed.
+        checks.push({
+          name: "secret-shape",
+          level: "fail",
+          message: secretInspect.errorMessage ?? secretInspect.errorCode,
+          fix:
+            secretInspect.errorCode === "DecryptFailure"
+              ? "function role likely lacks kms:Decrypt on the CMK"
+              : secretInspect.errorCode === "AccessDenied"
+                ? "function role likely lacks secretsmanager:GetSecretValue"
+                : "rotate the secret with a value the extension can parse",
+        });
+      } else if (secretInspect.tokenValue) {
+        const tokRe = /^auth_[A-Za-z0-9]{32,}$/;
+        if (!tokRe.test(secretInspect.tokenValue)) {
+          checks.push({
+            name: "secret-shape",
+            level: "warn",
+            message:
+              "secret value doesn't match the expected token shape (auth_…)",
+          });
+        } else {
+          checks.push({
+            name: "secret-shape",
+            level: "ok",
+            message: "secret value parses as a Dash0 token",
+          });
+        }
+      }
+
+      // 4c. Best-effort IAM simulation against the function's role.
+      if (fn.role) {
+        const sim = await simulateLambdaSecretAccess({
+          region: opts.region,
+          roleArn: fn.role,
+          secretArn: arn,
+          kmsKeyArn: secretInspect.kmsKeyId,
+        });
+        if (sim.inconclusive) {
+          checks.push({
+            name: "secret-iam",
+            level: "warn",
+            message: `couldn't simulate role access (${sim.reason ?? "unknown"})`,
+            fix: "your CLI creds probably lack iam:SimulatePrincipalPolicy; if your function fails to read the secret, attach a policy granting secretsmanager:GetSecretValue on the ARN to the function role",
+          });
+        } else if (!sim.allowed) {
+          const denied = sim.decisions
+            .filter((d) => d.decision !== "allowed")
+            .map((d) => `${d.action}=${d.decision}`)
+            .join(", ");
+          checks.push({
+            name: "secret-iam",
+            level: "fail",
+            message: `function role ${fn.role} cannot ${denied}`,
+            fix: `attach a policy granting ${sim.decisions
+              .filter((d) => d.decision !== "allowed")
+              .map((d) => d.action)
+              .join(" + ")} on ${arn}${secretInspect.kmsKeyId ? ` and ${secretInspect.kmsKeyId}` : ""} — or set DASH0_TOKEN directly`,
+          });
+        } else {
+          checks.push({
+            name: "secret-iam",
+            level: "ok",
+            message: "function role can read the secret (and decrypt CMK)",
+          });
+        }
+      }
+    }
+  }
+
   // 5. endpoint
   const ep = fn.env.DASH0_ENDPOINT;
   if (!ep) {
@@ -281,6 +402,19 @@ export async function validate(opts: ValidateOptions): Promise<ValidateResult> {
     if (ck.fix && ck.level !== "ok") console.log(`      ${c.dim("fix: " + ck.fix)}`);
   }
 
+  // Optional: show the resolved token (from env or fetched secret).
+  if (opts.showToken) {
+    const tok = hasToken ? fn.env.DASH0_TOKEN : secretInspect?.tokenValue;
+    console.log("");
+    if (!tok) {
+      console.log(c.dim("  token: (could not resolve)"));
+    } else {
+      const display = opts.revealToken ? tok : redactToken(tok);
+      const source = hasToken ? "DASH0_TOKEN" : "Secrets Manager";
+      console.log(`  token (${source}): ${display}`);
+    }
+  }
+
   const failures = checks.filter((k) => k.level === "fail").length;
   const warns = checks.filter((k) => k.level === "warn").length;
   console.log("");
@@ -289,6 +423,11 @@ export async function validate(opts: ValidateOptions): Promise<ValidateResult> {
   else fail(`${opts.function} has ${failures} failure(s) and ${warns} warning(s).`);
 
   return { function: opts.function, checks, pass: failures === 0 };
+}
+
+function redactToken(tok: string): string {
+  if (tok.length <= 12) return "***";
+  return `${tok.slice(0, 8)}…${tok.slice(-4)}`;
 }
 
 // keep this so the file referenced by tests has a stable export surface

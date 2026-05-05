@@ -4,7 +4,7 @@ import { generate } from "../src/commands/generate.js";
 const base = {
   region: "us-west-2",
   family: "node" as const,
-  layerVersion: 5,
+  layerVersion: 6,
   endpoint: "https://ingress.us-west-2.aws.dash0.com:4318",
 };
 
@@ -16,7 +16,7 @@ describe("generate", () => {
       tokenFromSsm: "/dash0/prod/token",
     });
     expect(out).toMatch(/aws_lambda_function/);
-    expect(out).toMatch(/dash0-extension-node:5/);
+    expect(out).toMatch(/dash0-extension-node:6/);
     expect(out).toMatch(/AWS_LAMBDA_EXEC_WRAPPER\s*=\s*"\/opt\/wrapper"/);
     expect(out).toMatch(/aws_ssm_parameter/);
   });
@@ -30,7 +30,7 @@ describe("generate", () => {
     // Plain CF uses AWS::Lambda::Function, not the SAM higher-level resource.
     expect(out).toMatch(/AWS::Lambda::Function/);
     expect(out).not.toMatch(/AWS::Serverless::Function/);
-    expect(out).toMatch(/dash0-extension-node:5/);
+    expect(out).toMatch(/dash0-extension-node:6/);
     expect(out).toMatch(/AWS_LAMBDA_EXEC_WRAPPER:\s*\/opt\/wrapper/);
     // Dynamic-reference syntax for SSM-secure params.
     expect(out).toMatch(/\{\{resolve:ssm-secure:\/dash0\/prod\/token:1\}\}/);
@@ -39,7 +39,7 @@ describe("generate", () => {
   it("emits SAM YAML", () => {
     const out = generate({ ...base, flavor: "sam", token: "auth_xxx" });
     expect(out).toMatch(/AWS::Serverless::Function/);
-    expect(out).toMatch(/dash0-extension-node:5/);
+    expect(out).toMatch(/dash0-extension-node:6/);
     expect(out).toMatch(/AWS_LAMBDA_EXEC_WRAPPER:\s*\/opt\/wrapper/);
   });
 
@@ -50,14 +50,14 @@ describe("generate", () => {
       tokenFromSsm: "/dash0/prod/token",
     });
     expect(out).toMatch(/lambda\.LayerVersion\.fromLayerVersionArn/);
-    expect(out).toMatch(/dash0-extension-node:5/);
+    expect(out).toMatch(/dash0-extension-node:6/);
     expect(out).toMatch(/aws-cdk-lib\/aws-ssm/);
   });
 
   it("emits Serverless Framework", () => {
     const out = generate({ ...base, flavor: "serverless", token: "auth_xxx" });
     expect(out).toMatch(/provider:/);
-    expect(out).toMatch(/dash0-extension-node:5/);
+    expect(out).toMatch(/dash0-extension-node:6/);
   });
 
   it("manual family omits AWS_LAMBDA_EXEC_WRAPPER", () => {
@@ -68,6 +68,6 @@ describe("generate", () => {
       tokenFromSsm: "/dash0/prod/token",
     });
     expect(out).not.toMatch(/AWS_LAMBDA_EXEC_WRAPPER/);
-    expect(out).toMatch(/dash0-extension-manual:5/);
+    expect(out).toMatch(/dash0-extension-manual:6/);
   });
 });

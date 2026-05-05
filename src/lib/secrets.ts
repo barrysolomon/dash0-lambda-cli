@@ -18,6 +18,10 @@ import {
   SecretsManagerClient,
   TagResourceCommand,
 } from "@aws-sdk/client-secrets-manager";
+import {
+  IAMClient,
+  SimulatePrincipalPolicyCommand,
+} from "@aws-sdk/client-iam";
 
 export interface SaveTokenOptions {
   region: string;
@@ -141,4 +145,176 @@ export function defaultSecretName(opts: {
 }): string {
   const base = "dash0/lambda-extension";
   return opts.dataset ? `${base}/${opts.dataset}` : base;
+}
+
+export interface InspectSecretResult {
+  arn: string;
+  exists: boolean;
+  /** Set when the caller can read the value (or is told the resource is missing). */
+  errorCode?: "AccessDenied" | "NotFound" | "DecryptFailure" | "Unknown";
+  errorMessage?: string;
+  /** KMS key ARN/id from DescribeSecret, if any. */
+  kmsKeyId?: string;
+  /** True if SecretString parses as JSON. */
+  isJson?: boolean;
+  /** Top-level keys when isJson — never includes values. */
+  jsonKeys?: string[];
+  /** The token value, if it could be extracted. */
+  tokenValue?: string;
+  /** Length of the raw secret string when we couldn't extract a token. */
+  rawLength?: number;
+}
+
+/**
+ * Read a secret and try to extract the token. Never throws — folds AWS
+ * errors (NotFound, AccessDenied, KMS decrypt) into the result object so
+ * callers can render a graceful diagnostic.
+ *
+ * @param key  When set, treat the secret as JSON and pull this key. When
+ *             unset, return the raw secret string as the token (matching
+ *             the extension's "DASH0_TOKEN_SECRET_KEY unset" behavior).
+ */
+export async function inspectSecret(opts: {
+  region: string;
+  arn: string;
+  key?: string;
+  client?: SecretsManagerClient;
+}): Promise<InspectSecretResult> {
+  const sm = opts.client ?? new SecretsManagerClient({ region: opts.region });
+  const out: InspectSecretResult = { arn: opts.arn, exists: false };
+
+  try {
+    const desc = await sm.send(
+      new DescribeSecretCommand({ SecretId: opts.arn }),
+    );
+    out.exists = true;
+    out.kmsKeyId = desc.KmsKeyId;
+  } catch (err) {
+    out.errorCode = classifySecretError(err);
+    out.errorMessage = (err as Error).message;
+    return out;
+  }
+
+  let raw: string;
+  try {
+    const v = await sm.send(new GetSecretValueCommand({ SecretId: opts.arn }));
+    raw = v.SecretString ?? "";
+  } catch (err) {
+    out.errorCode = classifySecretError(err);
+    out.errorMessage = (err as Error).message;
+    return out;
+  }
+
+  out.rawLength = raw.length;
+  // Attempt JSON parse so we can report shape + key existence.
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object") {
+      out.isJson = true;
+      out.jsonKeys = Object.keys(parsed as Record<string, unknown>);
+      if (opts.key) {
+        const v = (parsed as Record<string, unknown>)[opts.key];
+        if (typeof v === "string") out.tokenValue = v;
+        else {
+          out.errorCode = "Unknown";
+          out.errorMessage = `Secret is JSON but has no string field "${opts.key}".`;
+        }
+      } else {
+        // JSON-shaped secret without a key — extension would treat the raw
+        // string as the token, which is almost certainly wrong. Flag it.
+        out.errorCode = "Unknown";
+        out.errorMessage =
+          "Secret value is JSON but DASH0_TOKEN_SECRET_KEY is not set; the extension will treat the entire JSON string as the token.";
+      }
+    } else {
+      out.isJson = false;
+      if (!opts.key) out.tokenValue = raw;
+    }
+  } catch {
+    out.isJson = false;
+    if (opts.key) {
+      out.errorCode = "Unknown";
+      out.errorMessage = `Secret is not JSON, but DASH0_TOKEN_SECRET_KEY=${opts.key} expects it to be.`;
+    } else {
+      out.tokenValue = raw;
+    }
+  }
+
+  return out;
+}
+
+function classifySecretError(
+  err: unknown,
+): "AccessDenied" | "NotFound" | "DecryptFailure" | "Unknown" {
+  if (err instanceof ResourceNotFoundException) return "NotFound";
+  const e = err as { name?: string; Code?: string };
+  const code = e.name ?? e.Code ?? "";
+  if (code === "AccessDeniedException") return "AccessDenied";
+  if (code === "DecryptionFailure" || code === "KMSAccessDeniedException")
+    return "DecryptFailure";
+  return "Unknown";
+}
+
+export interface SimulateAccessResult {
+  /** True only when simulation explicitly allowed every action. */
+  allowed: boolean;
+  /** True when we couldn't run the simulation at all (e.g. caller lacks iam:Simulate*). */
+  inconclusive: boolean;
+  decisions: Array<{
+    action: string;
+    decision: string;
+    matched: string[];
+  }>;
+  reason?: string;
+}
+
+/**
+ * Best-effort: simulate whether the function's role can read the secret
+ * (and decrypt it if a CMK is in play). When the caller can't run
+ * `iam:SimulatePrincipalPolicy`, returns `inconclusive: true` rather
+ * than failing — by design (per project policy: if you can't simulate
+ * it, the Lambda probably can't read it either, and the user will see
+ * that during validation through other signals).
+ */
+export async function simulateLambdaSecretAccess(opts: {
+  region: string;
+  roleArn: string;
+  secretArn: string;
+  kmsKeyArn?: string;
+  client?: IAMClient;
+}): Promise<SimulateAccessResult> {
+  const iam = opts.client ?? new IAMClient({ region: opts.region });
+  const actions = ["secretsmanager:GetSecretValue"];
+  const resourceArns: string[] = [opts.secretArn];
+  if (opts.kmsKeyArn) {
+    actions.push("kms:Decrypt");
+    resourceArns.push(opts.kmsKeyArn);
+  }
+
+  try {
+    const out = await iam.send(
+      new SimulatePrincipalPolicyCommand({
+        PolicySourceArn: opts.roleArn,
+        ActionNames: actions,
+        ResourceArns: resourceArns,
+      }),
+    );
+    const decisions =
+      (out.EvaluationResults ?? []).map((r) => ({
+        action: r.EvalActionName ?? "?",
+        decision: r.EvalDecision ?? "?",
+        matched: (r.MatchedStatements ?? []).map(
+          (s) => `${s.SourcePolicyId ?? "?"}#${s.SourcePolicyType ?? "?"}`,
+        ),
+      })) ?? [];
+    const allowed = decisions.every((d) => d.decision === "allowed");
+    return { allowed, inconclusive: false, decisions };
+  } catch (err) {
+    return {
+      allowed: false,
+      inconclusive: true,
+      decisions: [],
+      reason: (err as Error).message,
+    };
+  }
 }

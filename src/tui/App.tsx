@@ -37,6 +37,7 @@ import { SwitchRegion } from "./screens/SwitchRegion.js";
 import { SwitchProfile } from "./screens/SwitchProfile.js";
 import { Help } from "./screens/Help.js";
 import { AuthError } from "./screens/AuthError.js";
+import { Secret } from "./screens/Secret.js";
 import { SwitchVendor } from "./screens/SwitchVendor.js";
 import { UpdateLayer } from "./screens/UpdateLayer.js";
 import { isAwsAuthError } from "../menu/auth.js";
@@ -195,6 +196,8 @@ const ScreenRouter: React.FC<{
       return <SwitchVendor state={state} setState={setState} />;
     case "update-layer":
       return <UpdateLayer state={state} setState={setState} />;
+    case "secret":
+      return <Secret state={state} setState={setState} />;
     default:
       return <Text>Unknown screen: {state.screen}</Text>;
   }

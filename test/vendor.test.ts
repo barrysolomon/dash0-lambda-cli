@@ -7,7 +7,7 @@ import {
 import type { FunctionSnapshot } from "../src/lib/lambda.js";
 
 const DASH0_LAYER =
-  "arn:aws:lambda:us-west-2:115813213817:layer:dash0-extension-node:5";
+  "arn:aws:lambda:us-west-2:115813213817:layer:dash0-extension-node:6";
 const LUMIGO_LAYER =
   "arn:aws:lambda:us-west-2:114300393969:layer:lumigo-node-tracer:128";
 

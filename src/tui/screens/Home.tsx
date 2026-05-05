@@ -105,6 +105,13 @@ function buildRows(state: AppState): Row[] {
     });
     rows.push({
       kind: "action",
+      label: "Inspect Dash0 token / secret",
+      value: "secret",
+      description:
+        "Read the token from DASH0_TOKEN or Secrets Manager. Redacted by default; press R to reveal.",
+    });
+    rows.push({
+      kind: "action",
       label: "Uninstall Dash0",
       value: "uninstall",
       description: "Remove the layer + DASH0_* env vars.",

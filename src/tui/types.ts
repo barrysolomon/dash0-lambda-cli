@@ -19,6 +19,7 @@ export type Screen =
   | "auth-error"
   | "switch-vendor"
   | "update-layer"
+  | "secret"
   | "exit";
 
 /**
