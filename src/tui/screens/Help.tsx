@@ -26,6 +26,7 @@ export const Help: React.FC<ScreenProps> = () => (
       <Text>  ⏎ enter   install on highlighted (or selection)</Text>
       <Text>  i / v / u install / validate / uninstall</Text>
       <Text>  o         open in AWS console</Text>
+      <Text>  e         edit Dash0 env vars (per-function)</Text>
       <Text>  r         refresh</Text>
     </Box>
     <Box marginTop={1}>

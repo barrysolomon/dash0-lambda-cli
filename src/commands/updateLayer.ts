@@ -1,8 +1,8 @@
 /**
  * `dash0-lambda update` — replace an attached Dash0 layer with the
  * CLI's known-current version, leaving env vars and other layers
- * untouched. Useful when v6 ships and you want to bump every
- * function without re-entering tokens.
+ * untouched. Useful when a new layer version ships and you want to
+ * bump every function without re-entering tokens.
  *
  * Behavior:
  *   - If no Dash0 layer is attached, returns a clear blocker — use

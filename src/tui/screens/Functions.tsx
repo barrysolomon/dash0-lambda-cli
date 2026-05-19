@@ -12,6 +12,7 @@
  *   v         validate the highlighted function (or first selected)
  *   u         uninstall the highlighted function (or selected set)
  *   o         open the highlighted function in the AWS console
+ *   e         edit Dash0 env vars on the highlighted function
  *   r         refresh the list
  *   esc       back to home
  */
@@ -231,6 +232,16 @@ export const Functions: React.FC<ScreenProps> = ({ state, setState }) => {
     if (cur && input === "o") enterAction("console");
     if (cur && input === "s") enterAction("switch-vendor");
     if (cur && input === "U") enterAction("update-layer");
+    if (cur && input === "e") {
+      // Per-function Dash0 env editor. Always single-target (focused row),
+      // even if a multi-selection exists — bulk env edits are out of scope.
+      setState((s) => ({
+        ...s,
+        focused: cur,
+        back: [...s.back, s.screen],
+        screen: "env-manage",
+      }));
+    }
 
     // Enter on a function row: route back to Home where the selection-
     // aware "Operate on N selected" menu lives. With no selection, we

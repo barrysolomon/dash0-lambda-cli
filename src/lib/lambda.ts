@@ -39,6 +39,12 @@ export interface FunctionSnapshot {
    */
   packageType: "Zip" | "Image";
   /**
+   * RevisionId — opaque token bumped on every config change. Pass it back
+   * to UpdateFunctionConfiguration to detect concurrent edits (AWS will
+   * throw PreconditionFailed/ResourceConflictException if stale).
+   */
+  revisionId?: string;
+  /**
    * Resource tags. Populated lazily by callers that need them (the list
    * API doesn't return tags — it takes a separate `ListTags` call per
    * ARN). Absent when not yet fetched; empty object when fetched and
@@ -122,6 +128,34 @@ export class LambdaWrapper {
     return { applied: true };
   }
 
+  /**
+   * Replace only the function's environment variables, leaving Layers and
+   * everything else untouched. AWS's UpdateFunctionConfiguration leaves
+   * omitted top-level fields alone, so this is a true env-only patch.
+   *
+   * `env` is a full replacement of Environment.Variables — caller is
+   * responsible for read-modify-write semantics. Pass `revisionId` to
+   * detect concurrent updates (the API returns ResourceConflictException
+   * when stale).
+   */
+  async updateEnvOnly(args: {
+    name: string;
+    env: Record<string, string>;
+    revisionId?: string;
+  }): Promise<{ applied: boolean; reason?: string }> {
+    if (this.dryRun) {
+      return { applied: false, reason: "dry-run" };
+    }
+    await this.client.send(
+      new UpdateFunctionConfigurationCommand({
+        FunctionName: args.name,
+        Environment: { Variables: args.env },
+        RevisionId: args.revisionId,
+      }),
+    );
+    return { applied: true };
+  }
+
   /** Direct passthrough for callers that need package-level details. */
   async getFunctionFull(name: string) {
     return this.client.send(new GetFunctionCommand({ FunctionName: name }));
@@ -149,6 +183,7 @@ function toSnapshot(fn: FunctionConfiguration): FunctionSnapshot {
     role: fn.Role ?? "",
     lastModified: fn.LastModified,
     packageType,
+    revisionId: fn.RevisionId,
     raw: fn,
   };
 }

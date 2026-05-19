@@ -111,8 +111,8 @@ feel like, but for managing the Dash0 Lambda extension.
 
     name                                  runtime         dash0          lumigo    endpoint
     ❯ ErrorLogWith400                     nodejs18.x      —              yes       —
-    ● orders-create                       nodejs20.x      v6/node        —         https://ingress.us-…
-    ● orders-charge                       nodejs20.x      v6/node        —         https://ingress.us-…
+    ● orders-create                       nodejs20.x      v9/node        —         https://ingress.us-…
+    ● orders-charge                       nodejs20.x      v9/node        —         https://ingress.us-…
       payments-refund                     python3.12      —              yes       —
 
 ╭ ↑↓ nav   / filter   ␣ select   i install   v validate   u uninstall   o open   r refresh   esc back        a profile   R region   ? help   q quit ╮
@@ -292,7 +292,7 @@ mapping (run `dash0-lambda install --help` for descriptions):
 
 By default the CLI looks up layers in account `115813213817` (the canonical
 Dash0 publisher) at the version pinned in
-[`src/lib/layers.ts`](src/lib/layers.ts) (currently **v6** for every family).
+[`src/lib/layers.ts`](src/lib/layers.ts) (currently **v9** for every family).
 The CLI does **not** call `lambda:ListLayerVersions` by default — the
 canonical Dash0 layers grant you `GetLayerVersion` (so you can attach them)
 but not List, so dynamic version discovery would fail with AccessDenied for
@@ -302,7 +302,7 @@ cuts a new release.
 Override per-invocation:
 
 ```bash
-./dash0-lambda install ... --layer-version 6           # pin to a specific version
+./dash0-lambda install ... --layer-version 7           # pin to a specific version
 ./dash0-lambda install ... --layer-owner 139457818185  # use rehosted layers
 # or set the publisher globally:
 export DASH0_LAYER_OWNER_ACCOUNT=139457818185
@@ -311,7 +311,13 @@ export DASH0_LAYER_OWNER_ACCOUNT=139457818185
 # src/lib/layers.ts, then update each function's layer in place — no
 # token, no env-var changes, just a layer ARN swap:
 ./dash0-lambda update -f orders-create -r us-west-2
+./dash0-lambda update -f orders-create -r us-west-2 --layer-version 7   # pin
 ```
+
+In the interactive TUI, the **Install** wizard's review screen and the
+**Update layer** screen both expose a `v` hotkey to pin a target version
+(blank+⏎ clears the pin). The pin is a single number applied to every
+runtime family in the selection — matches the CLI flag's semantics.
 
 Layers are published in every supported AWS region under the same version
 number, so the same `--layer-version` works regardless of the function's

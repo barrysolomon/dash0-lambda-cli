@@ -46,13 +46,14 @@ describe("install", () => {
     });
 
     expect(r.applied).toBe(true);
-    // KNOWN_LATEST_LAYER_VERSION.node is 6 — pinned in src/lib/layers.ts.
+    // KNOWN_LATEST_LAYER_VERSION.node is 9 — pinned in src/lib/layers.ts.
     expect(r.layerArn).toBe(
-      "arn:aws:lambda:us-west-2:115813213817:layer:dash0-extension-node:6",
+      "arn:aws:lambda:us-west-2:115813213817:layer:dash0-extension-node:9",
     );
     expect(r.envAfter.DB_URL).toBe("postgres://x"); // preserved
     expect(r.envAfter.DASH0_ENDPOINT).toBe(ENDPOINT);
     expect(r.envAfter.AWS_LAMBDA_EXEC_WRAPPER).toBe("/opt/wrapper");
+    expect(r.envAfter.OTEL_SERVICE_NAME).toBeUndefined();
 
     // Default install should NOT call ListLayerVersions — that requires a
     // cross-account permission the canonical Dash0 layer doesn't grant.
@@ -63,7 +64,37 @@ describe("install", () => {
     const calls = lambdaMock.commandCalls(UpdateFunctionConfigurationCommand);
     expect(calls).toHaveLength(1);
     const sentLayers = calls[0]!.args[0].input.Layers ?? [];
-    expect(sentLayers[0]).toContain("dash0-extension-node:6");
+    expect(sentLayers[0]).toContain("dash0-extension-node:9");
+  });
+
+  it("honors an explicit layerVersion override (pinning to an older release)", async () => {
+    lambdaMock.on(GetFunctionConfigurationCommand).resolves({
+      FunctionName: "orders-create",
+      Runtime: "nodejs20.x",
+      Architectures: ["x86_64"],
+      Layers: [],
+      Environment: { Variables: {} },
+      Role: "arn:aws:iam::111:role/orders-create",
+    });
+    lambdaMock.on(UpdateFunctionConfigurationCommand).resolves({});
+
+    const wrapper = new LambdaWrapper({
+      region: "us-west-2",
+      client: lambdaMock as unknown as LambdaClient,
+    });
+    const r = await install({
+      function: "orders-create",
+      region: "us-west-2",
+      endpoint: ENDPOINT,
+      token: VALID_TOKEN,
+      layerVersion: 7,
+      lambda: wrapper,
+    });
+
+    expect(r.applied).toBe(true);
+    expect(r.layerArn).toBe(
+      "arn:aws:lambda:us-west-2:115813213817:layer:dash0-extension-node:7",
+    );
   });
 
   it("preserves non-Dash0 layers and pre-existing env", async () => {

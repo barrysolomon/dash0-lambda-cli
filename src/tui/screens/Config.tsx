@@ -26,6 +26,7 @@ import {
   type SavedConfig,
 } from "../../lib/config.js";
 import { defaultSecretName, saveTokenToSecret } from "../../lib/secrets.js";
+import { SECRETS_DISABLED } from "../../lib/features.js";
 import type { ScreenProps } from "../types.js";
 
 type FieldKey =
@@ -532,18 +533,19 @@ const TokenChooser: React.FC<{
 }> = ({ cfg, onCancel, onPickStorage, onClear }) => {
   const summary = describeTokenStorage(cfg);
   type Choice = "secret" | "local" | "clear";
-  const items: Array<{ label: string; hint: string; value: Choice }> = [
-    {
+  const items: Array<{ label: string; hint: string; value: Choice }> = [];
+  if (!SECRETS_DISABLED) {
+    items.push({
       label: "Save token to AWS Secrets Manager",
       hint: "Creates or rotates a secret; saves the ARN here for future installs to reference.",
       value: "secret",
-    },
-    {
-      label: "Save token to local file",
-      hint: "Writes ./.dash0-lambda.token at chmod 0600 and auto-gitignores it. Token gets baked into DASH0_TOKEN env var on each install.",
-      value: "local",
-    },
-  ];
+    });
+  }
+  items.push({
+    label: "Save token to local file",
+    hint: "Writes ./.dash0-lambda.token at chmod 0600 and auto-gitignores it. Token gets baked into DASH0_TOKEN env var on each install.",
+    value: "local",
+  });
   if (summary) {
     items.push({
       label: "Clear token storage",

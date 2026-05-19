@@ -25,6 +25,7 @@ const SCREEN_HOTKEYS: Partial<Record<Screen, Array<[string, string]>>> = {
     ["U", "update layer"],
     ["s", "switch vendor"],
     ["o", "open"],
+    ["e", "env"],
     ["r", "refresh"],
     ["esc", "back"],
   ],
@@ -40,7 +41,8 @@ const SCREEN_HOTKEYS: Partial<Record<Screen, Array<[string, string]>>> = {
   help: [["esc", "close"]],
   "auth-error": [["⏎", "select"], ["R", "retry verify"], ["esc", "back"]],
   "switch-vendor": [["⏎", "select"], ["esc", "back"]],
-  "update-layer": [["↑↓", "nav"], ["␣", "toggle"], ["A", "all out-of-date"], ["x", "clear"], ["⏎", "apply"], ["r", "rescan"], ["esc", "back"]],
+  "update-layer": [["↑↓", "nav"], ["␣", "toggle"], ["A", "all out-of-date"], ["x", "clear"], ["v", "pin version"], ["⏎", "apply"], ["r", "rescan"], ["esc", "back"]],
+  "env-manage": [["↑↓", "nav"], ["⏎", "edit"], ["d/c", "delete"], ["x", "revert"], ["R", "reveal"], ["s", "save"], ["esc", "back"]],
 };
 
 const STATUS_COLOR = {

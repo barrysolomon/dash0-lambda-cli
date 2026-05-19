@@ -20,6 +20,7 @@ export type Screen =
   | "switch-vendor"
   | "update-layer"
   | "secret"
+  | "env-manage"
   | "exit";
 
 /**

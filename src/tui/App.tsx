@@ -38,6 +38,7 @@ import { SwitchProfile } from "./screens/SwitchProfile.js";
 import { Help } from "./screens/Help.js";
 import { AuthError } from "./screens/AuthError.js";
 import { Secret } from "./screens/Secret.js";
+import { EnvManage } from "./screens/EnvManage.js";
 import { SwitchVendor } from "./screens/SwitchVendor.js";
 import { UpdateLayer } from "./screens/UpdateLayer.js";
 import { isAwsAuthError } from "../menu/auth.js";
@@ -198,6 +199,8 @@ const ScreenRouter: React.FC<{
       return <UpdateLayer state={state} setState={setState} />;
     case "secret":
       return <Secret state={state} setState={setState} />;
+    case "env-manage":
+      return <EnvManage state={state} setState={setState} />;
     default:
       return <Text>Unknown screen: {state.screen}</Text>;
   }

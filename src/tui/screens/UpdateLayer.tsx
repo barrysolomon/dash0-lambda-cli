@@ -10,7 +10,7 @@
  *
  * Once loaded, the screen acts as a multi-select table:
  *   ↑↓ navigate · ␣ toggle · A select-all-out-of-date · x clear
- *   ⏎ apply  ·  r refresh  ·  esc back
+ *   ⏎ apply  ·  r refresh  ·  v pin a target version  ·  esc back
  *
  * Apply iterates the selected rows only and runs updateLayer() per row,
  * streaming each command's output into a log panel.
@@ -59,6 +59,15 @@ export const UpdateLayer: React.FC<ScreenProps> = ({ state }) => {
   const [bulkRows, setBulkRows] = useState<BulkResult[]>([]);
   const [error, setError] = useState<string | undefined>();
   const [refreshTick, setRefreshTick] = useState(0);
+  /** Optional pinned target version. When `undefined`, each row targets
+   *  `KNOWN_LATEST_LAYER_VERSION[family]` (CLI default). When set, every
+   *  row targets this number regardless of family — matches the `single
+   *  v<n>, applied to every family` semantics chosen for install. */
+  const [override, setOverride] = useState<number | undefined>();
+  /** When true, the row table is replaced by an inline numeric editor. */
+  const [editingOverride, setEditingOverride] = useState(false);
+  const [overrideDraft, setOverrideDraft] = useState("");
+  const [overrideError, setOverrideError] = useState<string | undefined>();
 
   // Load + classify.
   useEffect(() => {
@@ -125,15 +134,68 @@ export const UpdateLayer: React.FC<ScreenProps> = ({ state }) => {
     };
   }, [state.region, mode, incoming.join("|"), refreshTick]);
 
+  // Re-derive each row's target + status against the current override.
+  // Baseline `rows` always carries the KNOWN_LATEST target — that way
+  // unsetting the override returns to the original classification with
+  // no rescan.
+  const displayRows = useMemo<PlanRow[]>(() => {
+    if (override === undefined) return rows;
+    return rows.map((r) => {
+      if (r.status === "loading" || r.status === "blocked") return r;
+      const current = r.current ?? 0;
+      const target = override;
+      const status: RowStatus =
+        current === target ? "noop" : target < current ? "downgrade" : "ready";
+      return { ...r, target, status };
+    });
+  }, [rows, override]);
+
   useInput((input, key) => {
     if (stage !== "review") return;
+    if (editingOverride) {
+      // Numeric editor owns its own input until submit/esc.
+      if (key.escape) {
+        setEditingOverride(false);
+        setOverrideError(undefined);
+        return;
+      }
+      if (key.return) {
+        const trimmed = overrideDraft.trim();
+        if (trimmed === "") {
+          setOverride(undefined);
+          setEditingOverride(false);
+          setOverrideError(undefined);
+          return;
+        }
+        const n = parseInt(trimmed, 10);
+        if (!Number.isFinite(n) || n <= 0 || String(n) !== trimmed) {
+          setOverrideError("must be a positive integer (or blank to clear)");
+          return;
+        }
+        setOverride(n);
+        setEditingOverride(false);
+        setOverrideError(undefined);
+        return;
+      }
+      if (key.backspace || key.delete) {
+        setOverrideDraft((s) => s.slice(0, -1));
+        setOverrideError(undefined);
+        return;
+      }
+      // Accept digits only.
+      if (input && /^[0-9]$/.test(input)) {
+        setOverrideDraft((s) => s + input);
+        setOverrideError(undefined);
+      }
+      return;
+    }
     if (key.upArrow) setCursor((c) => Math.max(0, c - 1));
-    if (key.downArrow) setCursor((c) => Math.min(rows.length - 1, c + 1));
+    if (key.downArrow) setCursor((c) => Math.min(displayRows.length - 1, c + 1));
     if (key.pageUp) setCursor((c) => Math.max(0, c - PAGE));
-    if (key.pageDown) setCursor((c) => Math.min(rows.length - 1, c + PAGE));
+    if (key.pageDown) setCursor((c) => Math.min(displayRows.length - 1, c + PAGE));
     if (input === "g") setCursor(0);
-    if (input === "G") setCursor(Math.max(0, rows.length - 1));
-    const cur = rows[cursor];
+    if (input === "G") setCursor(Math.max(0, displayRows.length - 1));
+    const cur = displayRows[cursor];
     if (input === " " && cur && (cur.status === "ready" || cur.status === "downgrade")) {
       setSelected((s) => {
         const next = new Set(s);
@@ -143,10 +205,15 @@ export const UpdateLayer: React.FC<ScreenProps> = ({ state }) => {
       });
     }
     if (input === "A") {
-      setSelected(new Set(rows.filter((r) => r.status === "ready").map((r) => r.name)));
+      setSelected(new Set(displayRows.filter((r) => r.status === "ready").map((r) => r.name)));
     }
     if (input === "x") setSelected(new Set());
     if (input === "r") setRefreshTick((t) => t + 1);
+    if (input === "v" || input === "V") {
+      setOverrideDraft(override !== undefined ? String(override) : "");
+      setOverrideError(undefined);
+      setEditingOverride(true);
+    }
     if (key.return && selected.size > 0) apply();
   });
 
@@ -156,15 +223,19 @@ export const UpdateLayer: React.FC<ScreenProps> = ({ state }) => {
     setError(undefined);
     // Best-effort: per-target try/catch via runBulk. captureConsole hides
     // the underlying command's stdout — outcomes appear in the BulkSummary.
-    const targets = rows.filter((r) => selected.has(r.name)).map((r) => r.name);
+    const targets = displayRows
+      .filter((r) => selected.has(r.name))
+      .map((r) => r.name);
     try {
       await captureConsole({ onLine: () => undefined }, async () => {
         await runBulk(
           targets,
           (name) =>
-            updateLayer({ function: name, region: state.region }).then(
-              () => undefined,
-            ),
+            updateLayer({
+              function: name,
+              region: state.region,
+              layerVersion: override,
+            }).then(() => undefined),
           setBulkRows,
         );
       });
@@ -177,22 +248,25 @@ export const UpdateLayer: React.FC<ScreenProps> = ({ state }) => {
   };
 
   const visible = useMemo(() => {
-    if (rows.length <= PAGE) return rows;
+    if (displayRows.length <= PAGE) return displayRows;
     const start = Math.max(
       0,
-      Math.min(cursor - Math.floor(PAGE / 2), rows.length - PAGE),
+      Math.min(cursor - Math.floor(PAGE / 2), displayRows.length - PAGE),
     );
-    return rows.slice(start, start + PAGE);
-  }, [rows, cursor]);
-  const visibleStart = rows.length <= PAGE
+    return displayRows.slice(start, start + PAGE);
+  }, [displayRows, cursor]);
+  const visibleStart = displayRows.length <= PAGE
     ? 0
-    : Math.max(0, Math.min(cursor - Math.floor(PAGE / 2), rows.length - PAGE));
+    : Math.max(
+        0,
+        Math.min(cursor - Math.floor(PAGE / 2), displayRows.length - PAGE),
+      );
 
   const counts = {
-    ready: rows.filter((r) => r.status === "ready").length,
-    noop: rows.filter((r) => r.status === "noop").length,
-    blocked: rows.filter((r) => r.status === "blocked").length,
-    downgrade: rows.filter((r) => r.status === "downgrade").length,
+    ready: displayRows.filter((r) => r.status === "ready").length,
+    noop: displayRows.filter((r) => r.status === "noop").length,
+    blocked: displayRows.filter((r) => r.status === "blocked").length,
+    downgrade: displayRows.filter((r) => r.status === "downgrade").length,
   };
 
   if (stage === "applying" || stage === "done") {
@@ -216,13 +290,17 @@ export const UpdateLayer: React.FC<ScreenProps> = ({ state }) => {
     );
   }
 
+  const targetSummary =
+    override !== undefined
+      ? `targeting v${override} (pinned — applies to every family)`
+      : `targeting CLI's known-latest per family (node:v${KNOWN_LATEST_LAYER_VERSION.node})`;
+
   return (
     <Box flexDirection="column">
       <Text bold>
         Update Dash0 layer{" "}
         <Text dimColor>
-          (CLI knows v{KNOWN_LATEST_LAYER_VERSION.node} as current — env vars
-          and other layers are left untouched.)
+          ({targetSummary} — env vars and other layers are left untouched.)
         </Text>
       </Text>
       <Text>
@@ -251,15 +329,30 @@ export const UpdateLayer: React.FC<ScreenProps> = ({ state }) => {
           <Text bold color="cyan">
             {selected.size} selected → ⏎ to apply
           </Text>
+          {"  "}
+          <Text dimColor>(press v to {override !== undefined ? "change/clear" : "pin"} version)</Text>
         </Text>
       </Box>
+      {editingOverride && (
+        <Box marginTop={1} flexDirection="column">
+          <Text>
+            <Text bold>Pin layer version: </Text>v
+            <Text color="cyan">{overrideDraft || "_"}</Text>
+            {"  "}
+            <Text dimColor>(digits · ⏎ submit · blank+⏎ clear · esc cancel)</Text>
+          </Text>
+          {overrideError && (
+            <Text color="red">{overrideError}</Text>
+          )}
+        </Box>
+      )}
 
       <Box marginTop={1} flexDirection="column">
-        {stage === "loading" && rows.length === 0 ? (
+        {stage === "loading" && displayRows.length === 0 ? (
           <Text>
             <Spinner type="dots" /> scanning {state.region}…
           </Text>
-        ) : rows.length === 0 ? (
+        ) : displayRows.length === 0 ? (
           <Text dimColor>
             No functions with a Dash0 layer found in {state.region}. Use
             `install` first to attach the layer.
@@ -285,10 +378,10 @@ export const UpdateLayer: React.FC<ScreenProps> = ({ state }) => {
                 />
               );
             })}
-            {rows.length > PAGE && (
+            {displayRows.length > PAGE && (
               <Text dimColor>
                 {" "}
-                showing {visibleStart + 1}–{Math.min(visibleStart + PAGE, rows.length)} of {rows.length}
+                showing {visibleStart + 1}–{Math.min(visibleStart + PAGE, displayRows.length)} of {displayRows.length}
               </Text>
             )}
           </>

@@ -31,6 +31,7 @@ import SelectInput from "ink-select-input";
 import Spinner from "ink-spinner";
 import TextInput from "ink-text-input";
 import { install } from "../../commands/install.js";
+import { KNOWN_LATEST_LAYER_VERSION } from "../../lib/layers.js";
 import {
   loadConfig,
   loadLocalToken,
@@ -39,6 +40,7 @@ import {
   type SavedConfig,
 } from "../../lib/config.js";
 import { defaultSecretName, saveTokenToSecret } from "../../lib/secrets.js";
+import { SECRETS_DISABLED } from "../../lib/features.js";
 import { resolveTargets, summarizeTargets } from "../lib/targets.js";
 import { captureConsole } from "../lib/captureConsole.js";
 import { runBulk, type BulkResult } from "../lib/bulk.js";
@@ -67,6 +69,8 @@ type Step =
   | "auth-arn-input"
   | "auth-saving"
   | "confirm"
+  /** Override editor reached from confirm via [v]. Returns to confirm on submit/esc. */
+  | "layer-version-input"
   | "applying"
   | "done"
   /** Setup-time failure (before bulk apply): bad token, secrets manager
@@ -87,6 +91,11 @@ export const Install: React.FC<ScreenProps> = ({ state, setState }) => {
   const [resolvedAuth, setResolvedAuth] = useState<AuthResolved | undefined>();
   /** What we tell the user we're doing in the "auth-saving" step. */
   const [savingMessage, setSavingMessage] = useState<string>("");
+  /** Optional layer-version pin. `undefined` means "use KNOWN_LATEST for
+   *  whatever family each function resolves to" — same semantics as
+   *  omitting `--layer-version` on the CLI. When set, the same number is
+   *  applied across every family in the selection. */
+  const [layerVersion, setLayerVersion] = useState<number | undefined>();
   const [bulkRows, setBulkRows] = useState<BulkResult[]>([]);
   const [error, setError] = useState<string | undefined>();
 
@@ -263,6 +272,7 @@ export const Install: React.FC<ScreenProps> = ({ state, setState }) => {
               tokenSecretKey: resolvedAuth.usingSecret
                 ? resolvedAuth.secretKey
                 : undefined,
+              layerVersion,
             }).then(() => undefined),
           setBulkRows,
         );
@@ -348,47 +358,42 @@ export const Install: React.FC<ScreenProps> = ({ state, setState }) => {
         </Text>
       </Box>
     );
+  if (step === "layer-version-input") {
+    return (
+      <Form
+        title="Layer version override"
+        prompt="Pin to layer version (blank = use CLI's known-latest per family):"
+        defaultValue={layerVersion !== undefined ? String(layerVersion) : ""}
+        validate={(v) => {
+          const trimmed = v.trim();
+          if (trimmed === "") return null;
+          const n = parseInt(trimmed, 10);
+          if (!Number.isFinite(n) || n <= 0 || String(n) !== trimmed) {
+            return "must be a positive integer (or blank to clear)";
+          }
+          return null;
+        }}
+        onSubmit={(v) => {
+          const trimmed = v.trim();
+          setLayerVersion(trimmed === "" ? undefined : parseInt(trimmed, 10));
+          setStep("confirm");
+        }}
+      />
+    );
+  }
   if (step === "confirm" && resolvedAuth) {
     const targets = resolved.names.length > 0 ? resolved.names : fn ? [fn] : [];
     return (
-      <Box flexDirection="column">
-        <Text bold>Step 4 of 4 — Review</Text>
-        <Box marginTop={1} flexDirection="column">
-          <Text>
-            <Text dimColor>function(s) ({targets.length}):</Text>{" "}
-            {summarizeTargets(targets)}
-          </Text>
-          <Text>
-            <Text dimColor>region:</Text> {region}
-          </Text>
-          <Text>
-            <Text dimColor>endpoint:</Text> {endpoint}
-          </Text>
-          <Text>
-            <Text dimColor>auth:</Text>{" "}
-            {resolvedAuth.usingSecret
-              ? `DASH0_TOKEN_SECRET_ARN=${resolvedAuth.arn}`
-              : "DASH0_TOKEN (set on each function)"}
-          </Text>
-          <Text dimColor>  source: {resolvedAuth.sourceLabel}</Text>
-        </Box>
-        <Box marginTop={1}>
-          <Pick
-            title="Apply?"
-            items={[
-              {
-                label: `Yes — install on ${targets.length} function(s)`,
-                value: "yes",
-              },
-              { label: "No — back to home", value: "no" },
-            ]}
-            onSelect={(v) => {
-              if (v === "yes") void onApply();
-              else setState((s) => ({ ...s, screen: "home", back: [] }));
-            }}
-          />
-        </Box>
-      </Box>
+      <ConfirmReview
+        targets={targets}
+        region={region}
+        endpoint={endpoint}
+        resolvedAuth={resolvedAuth}
+        layerVersion={layerVersion}
+        onEditVersion={() => setStep("layer-version-input")}
+        onApply={onApply}
+        onCancel={() => setState((s) => ({ ...s, screen: "home", back: [] }))}
+      />
     );
   }
   if (step === "applying" || step === "done") {
@@ -448,6 +453,12 @@ const AuthChooser: React.FC<{
   savedCfg: SavedConfig;
   onPick: (c: AuthChoice) => void;
 }> = ({ savedCfg, onPick }) => {
+  // When SECRETS_DISABLED is true, hide all "create new secret" / "use
+  // existing secret ARN" affordances. A previously-saved secret ARN
+  // (.dash0-lambda.json#tokenSecretArn) is still honored as a "saved
+  // option" so users mid-migration aren't stranded — they can keep
+  // installing against a secret they already created, but the CLI won't
+  // help them create new ones.
   const hasSavedSecret = !!savedCfg.tokenSecretArn;
   const hasSavedLocal = !!savedCfg.tokenLocalFile;
   const hasAnySaved = hasSavedSecret || hasSavedLocal;
@@ -482,23 +493,25 @@ const AuthChooser: React.FC<{
       });
     }
   }
-  rows.push({
-    kind: "header",
-    label: "Use Secrets Manager  (function reads DASH0_TOKEN_SECRET_ARN at runtime)",
-  });
-  rows.push({
-    kind: "action",
-    label: "Paste token, save to AWS Secrets Manager",
-    value: "new-paste-save-secret",
-    recommended: true,
-    hint: "Creates/rotates a secret. Sets DASH0_TOKEN_SECRET_ARN on the function. Function role needs secretsmanager:GetSecretValue.",
-  });
-  rows.push({
-    kind: "action",
-    label: "Use existing Secrets Manager ARN",
-    value: "new-existing-arn",
-    hint: "Paste an ARN you've already created. Sets DASH0_TOKEN_SECRET_ARN on the function.",
-  });
+  if (!SECRETS_DISABLED) {
+    rows.push({
+      kind: "header",
+      label: "Use Secrets Manager  (function reads DASH0_TOKEN_SECRET_ARN at runtime)",
+    });
+    rows.push({
+      kind: "action",
+      label: "Paste token, save to AWS Secrets Manager",
+      value: "new-paste-save-secret",
+      recommended: true,
+      hint: "Creates/rotates a secret. Sets DASH0_TOKEN_SECRET_ARN on the function. Function role needs secretsmanager:GetSecretValue.",
+    });
+    rows.push({
+      kind: "action",
+      label: "Use existing Secrets Manager ARN",
+      value: "new-existing-arn",
+      hint: "Paste an ARN you've already created. Sets DASH0_TOKEN_SECRET_ARN on the function.",
+    });
+  }
   rows.push({
     kind: "header",
     label: "Use literal env var  (sets DASH0_TOKEN directly on the function)",
@@ -507,6 +520,9 @@ const AuthChooser: React.FC<{
     kind: "action",
     label: "Paste token, save to local file (DASH0_TOKEN)",
     value: "new-paste-save-local",
+    // With Secrets Manager disabled, the local-file path becomes the
+    // recommended default for first-time installs.
+    recommended: SECRETS_DISABLED,
     hint: "Saves to ./.dash0-lambda.token (chmod 0600, auto-gitignored) for next time. Sets DASH0_TOKEN on the Lambda.",
   });
   rows.push({
@@ -690,3 +706,91 @@ const Pick: React.FC<{
     </Box>
   </Box>
 );
+
+const ConfirmReview: React.FC<{
+  targets: string[];
+  region: string;
+  endpoint: string;
+  resolvedAuth: AuthResolved;
+  /** undefined = use CLI's KNOWN_LATEST per family. */
+  layerVersion: number | undefined;
+  onEditVersion: () => void;
+  onApply: () => void;
+  onCancel: () => void;
+}> = ({
+  targets,
+  region,
+  endpoint,
+  resolvedAuth,
+  layerVersion,
+  onEditVersion,
+  onApply,
+  onCancel,
+}) => {
+  // `v` hotkey jumps to the layer-version editor. The Yes/No SelectInput
+  // owns up/down/enter, so this listener intentionally only handles `v`.
+  useInput((input) => {
+    if (input === "v" || input === "V") onEditVersion();
+  });
+
+  // Show what each runtime family will land on. When the user has pinned
+  // a version, every family resolves to that number — otherwise they may
+  // diverge if KNOWN_LATEST ever splits.
+  const families: Array<keyof typeof KNOWN_LATEST_LAYER_VERSION> = [
+    "node",
+    "python",
+    "java",
+    "manual",
+  ];
+  const versionLabel =
+    layerVersion !== undefined
+      ? `v${layerVersion} (pinned — applies to every family)`
+      : `auto — ${families
+          .map((f) => `${f}:v${KNOWN_LATEST_LAYER_VERSION[f]}`)
+          .join(", ")}`;
+
+  return (
+    <Box flexDirection="column">
+      <Text bold>Step 4 of 4 — Review</Text>
+      <Box marginTop={1} flexDirection="column">
+        <Text>
+          <Text dimColor>function(s) ({targets.length}):</Text>{" "}
+          {summarizeTargets(targets)}
+        </Text>
+        <Text>
+          <Text dimColor>region:</Text> {region}
+        </Text>
+        <Text>
+          <Text dimColor>endpoint:</Text> {endpoint}
+        </Text>
+        <Text>
+          <Text dimColor>auth:</Text>{" "}
+          {resolvedAuth.usingSecret
+            ? `DASH0_TOKEN_SECRET_ARN=${resolvedAuth.arn}`
+            : "DASH0_TOKEN (set on each function)"}
+        </Text>
+        <Text dimColor>  source: {resolvedAuth.sourceLabel}</Text>
+        <Text>
+          <Text dimColor>layer version:</Text> {versionLabel}{" "}
+          <Text dimColor>(press v to edit)</Text>
+        </Text>
+      </Box>
+      <Box marginTop={1}>
+        <Pick
+          title="Apply?"
+          items={[
+            {
+              label: `Yes — install on ${targets.length} function(s)`,
+              value: "yes",
+            },
+            { label: "No — back to home", value: "no" },
+          ]}
+          onSelect={(v) => {
+            if (v === "yes") onApply();
+            else onCancel();
+          }}
+        />
+      </Box>
+    </Box>
+  );
+};
