@@ -94,11 +94,11 @@ describe("KNOWN_LATEST_LAYER_VERSION", () => {
       expect(KNOWN_LATEST_LAYER_VERSION[fam]).toBeGreaterThan(0);
     }
   });
-  it("currently pins v9 across the board (bump when Dash0 ships a new release)", () => {
-    expect(KNOWN_LATEST_LAYER_VERSION.node).toBe(9);
-    expect(KNOWN_LATEST_LAYER_VERSION.python).toBe(9);
-    expect(KNOWN_LATEST_LAYER_VERSION.java).toBe(9);
-    expect(KNOWN_LATEST_LAYER_VERSION.manual).toBe(9);
+  it("currently pins v11 across the board (bump when Dash0 ships a new release)", () => {
+    expect(KNOWN_LATEST_LAYER_VERSION.node).toBe(11);
+    expect(KNOWN_LATEST_LAYER_VERSION.python).toBe(11);
+    expect(KNOWN_LATEST_LAYER_VERSION.java).toBe(11);
+    expect(KNOWN_LATEST_LAYER_VERSION.manual).toBe(11);
   });
 });
 

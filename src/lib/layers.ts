@@ -67,10 +67,10 @@ export const CANONICAL_OWNER_ACCOUNT = "115813213817";
  * for the common case.
  */
 export const KNOWN_LATEST_LAYER_VERSION: Record<RuntimeFamily, number> = {
-  manual: 9,
-  node: 9,
-  python: 9,
-  java: 9,
+  manual: 11,
+  node: 11,
+  python: 11,
+  java: 11,
 };
 
 /** AWS regions where Dash0 publishes the extension layers. */

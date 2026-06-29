@@ -111,8 +111,8 @@ feel like, but for managing the Dash0 Lambda extension.
 
     name                                  runtime         dash0          lumigo    endpoint
     ❯ ErrorLogWith400                     nodejs18.x      —              yes       —
-    ● orders-create                       nodejs20.x      v9/node        —         https://ingress.us-…
-    ● orders-charge                       nodejs20.x      v9/node        —         https://ingress.us-…
+    ● orders-create                       nodejs20.x      v11/node        —         https://ingress.us-…
+    ● orders-charge                       nodejs20.x      v11/node        —         https://ingress.us-…
       payments-refund                     python3.12      —              yes       —
 
 ╭ ↑↓ nav   / filter   ␣ select   i install   v validate   u uninstall   o open   r refresh   esc back        a profile   R region   ? help   q quit ╮
@@ -292,7 +292,7 @@ mapping (run `dash0-lambda install --help` for descriptions):
 
 By default the CLI looks up layers in account `115813213817` (the canonical
 Dash0 publisher) at the version pinned in
-[`src/lib/layers.ts`](src/lib/layers.ts) (currently **v9** for every family).
+[`src/lib/layers.ts`](src/lib/layers.ts) (currently **v11** for every family).
 The CLI does **not** call `lambda:ListLayerVersions` by default — the
 canonical Dash0 layers grant you `GetLayerVersion` (so you can attach them)
 but not List, so dynamic version discovery would fail with AccessDenied for
