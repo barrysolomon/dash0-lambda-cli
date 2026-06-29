@@ -48,7 +48,7 @@ describe("install", () => {
     expect(r.applied).toBe(true);
     // KNOWN_LATEST_LAYER_VERSION.node is 9 — pinned in src/lib/layers.ts.
     expect(r.layerArn).toBe(
-      "arn:aws:lambda:us-west-2:115813213817:layer:dash0-extension-node:9",
+      "arn:aws:lambda:us-west-2:115813213817:layer:dash0-extension-node:11",
     );
     expect(r.envAfter.DB_URL).toBe("postgres://x"); // preserved
     expect(r.envAfter.DASH0_ENDPOINT).toBe(ENDPOINT);
@@ -64,7 +64,7 @@ describe("install", () => {
     const calls = lambdaMock.commandCalls(UpdateFunctionConfigurationCommand);
     expect(calls).toHaveLength(1);
     const sentLayers = calls[0]!.args[0].input.Layers ?? [];
-    expect(sentLayers[0]).toContain("dash0-extension-node:9");
+    expect(sentLayers[0]).toContain("dash0-extension-node:11");
   });
 
   it("honors an explicit layerVersion override (pinning to an older release)", async () => {

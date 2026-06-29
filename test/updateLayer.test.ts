@@ -25,7 +25,7 @@ afterEach(() => lambdaMock.reset());
 const DASH0_OLD =
   "arn:aws:lambda:us-west-2:115813213817:layer:dash0-extension-node:3";
 const DASH0_CURRENT =
-  "arn:aws:lambda:us-west-2:115813213817:layer:dash0-extension-node:9";
+  "arn:aws:lambda:us-west-2:115813213817:layer:dash0-extension-node:11";
 const CUSTOM_LIB = "arn:aws:lambda:us-west-2:111:layer:custom-libs:7";
 
 function newWrapper() {
