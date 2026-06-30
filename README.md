@@ -242,6 +242,10 @@ If both `DASH0_TOKEN` and `DASH0_TOKEN_SECRET_ARN` are set on the function,
 the extension uses `DASH0_TOKEN`. The CLI's `validate` command warns when
 both are present.
 
+Both auth inputs can be supplied from your shell environment instead of a
+flag: `--token` defaults to `$DASH0_TOKEN` and `--token-secret-arn` defaults
+to `$DASH0_TOKEN_SECRET_ARN`. An explicit flag always overrides the env var.
+
 For IaC, prefer `--token-from-ssm /dash0/prod/token` so the token never
 ends up in source control.
 

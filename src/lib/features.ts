@@ -20,4 +20,4 @@
  * the only offered choice. Existing functions wired to a secret still
  * read/display correctly via `validate` and `secret show`.
  */
-export const SECRETS_DISABLED = true;
+export const SECRETS_DISABLED = false;

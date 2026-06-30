@@ -4,6 +4,7 @@ import {
   Dash0InstallConfigSchema,
   diffEnv,
   mergeEnv,
+  negatableFlag,
   stripDash0Keys,
 } from "../src/lib/env.js";
 
@@ -193,6 +194,46 @@ describe("configToEnv", () => {
       tokenSecretKey: "dash0_token",
     });
     expect(env.DASH0_TOKEN_SECRET_KEY).toBe("dash0_token");
+  });
+});
+
+describe("negatableFlag", () => {
+  // Commander negatable options (--no-x) arrive as `true` when the flag is
+  // absent (the implicit default) and `false` when the user passed --no-x.
+  // For knobs whose env-var default already matches the extension default,
+  // forwarding the implicit `true` writes a redundant env var that eats into
+  // the Lambda 4KB env budget. We must only forward an explicit opt-out.
+  it("maps the implicit commander default (true) to undefined", () => {
+    expect(negatableFlag(true)).toBeUndefined();
+  });
+  it("maps an explicit opt-out (false) to false", () => {
+    expect(negatableFlag(false)).toBe(false);
+  });
+  it("maps undefined to undefined", () => {
+    expect(negatableFlag(undefined)).toBeUndefined();
+  });
+  it("keeps these knobs OUT of env when the user didn't opt out", () => {
+    // Simulate the post-mapping install config when the user ran a plain
+    // `install` with no --no-* flags: negatableFlag has collapsed the
+    // commander defaults to undefined, so configToEnv emits neither key.
+    const env = configToEnv({
+      endpoint: ENDPOINT,
+      token: VALID_TOKEN,
+      sendOnInvocationEnd: negatableFlag(true),
+      createPayloadLogRecords: negatableFlag(true),
+    });
+    expect(env.DASH0_SEND_ON_INVOCATION_END).toBeUndefined();
+    expect(env.DASH0_CREATE_PAYLOAD_LOG_RECORDS).toBeUndefined();
+  });
+  it("emits the env var as false when the user explicitly opted out", () => {
+    const env = configToEnv({
+      endpoint: ENDPOINT,
+      token: VALID_TOKEN,
+      sendOnInvocationEnd: negatableFlag(false),
+      createPayloadLogRecords: negatableFlag(false),
+    });
+    expect(env.DASH0_SEND_ON_INVOCATION_END).toBe("false");
+    expect(env.DASH0_CREATE_PAYLOAD_LOG_RECORDS).toBe("false");
   });
 });
 

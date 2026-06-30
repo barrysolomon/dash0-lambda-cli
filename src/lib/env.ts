@@ -227,6 +227,22 @@ function boolStr(v: boolean | "true" | "false" | string): string {
 }
 
 /**
+ * Collapse a Commander negatable option down to "explicit opt-out only".
+ *
+ * A `--no-x` option has no tri-state: Commander hands us `true` when the
+ * flag is absent (the implicit default) and `false` when the user passed
+ * `--no-x`. Forwarding the implicit `true` straight into configToEnv writes
+ * an env var (e.g. DASH0_SEND_ON_INVOCATION_END=true) that merely restates
+ * the extension's own default — wasted bytes against the hard 4KB Lambda
+ * env-var limit. We only want to emit the var when the operator actually
+ * opted out, so map `false` → `false` and everything else → `undefined`
+ * (which configToEnv omits).
+ */
+export function negatableFlag(v: unknown): false | undefined {
+  return v === false ? false : undefined;
+}
+
+/**
  * Merge new Dash0 env into existing function env, preserving anything else
  * the customer set (DB URLs, feature flags, etc.).
  */

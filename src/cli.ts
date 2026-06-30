@@ -15,6 +15,8 @@
  * Global flags resolve from (in order): explicit --flag → env var → default.
  */
 
+import { realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { Command, Option } from "commander";
 import pkg from "../package.json" with { type: "json" };
 import { install } from "./commands/install.js";
@@ -35,9 +37,10 @@ import {
   type RuntimeFamily,
 } from "./lib/layers.js";
 import { promptDash0Token } from "./lib/prompt.js";
+import { negatableFlag } from "./lib/env.js";
 import { runTui } from "./tui/index.js";
 
-const program = new Command();
+export const program = new Command();
 
 program
   .name("dash0-lambda")
@@ -72,6 +75,7 @@ program
   .option(
     "--token-secret-arn <arn>",
     "Secrets Manager ARN holding the token (preferred for prod)",
+    process.env.DASH0_TOKEN_SECRET_ARN,
   )
   .option(
     "--token-secret-key <key>",
@@ -178,10 +182,13 @@ program
       extensionLogLevel: rawOpts.extensionLogLevel,
       distroDebug: rawOpts.distroDebug,
       disableAutoInstrumentation: rawOpts.disableAutoInstrumentation,
-      // commander turns --no-send-on-invocation-end into sendOnInvocationEnd:false
-      sendOnInvocationEnd: rawOpts.sendOnInvocationEnd,
+      // These are --no-* negatable flags. Commander defaults them to `true`
+      // when absent, which would emit a redundant env var equal to the
+      // extension's own default (wasting the 4KB env budget). negatableFlag
+      // forwards `false` only when the user explicitly opted out.
+      sendOnInvocationEnd: negatableFlag(rawOpts.sendOnInvocationEnd),
       xrayTracesEnabled: rawOpts.xrayTracesEnabled,
-      createPayloadLogRecords: rawOpts.createPayloadLogRecords,
+      createPayloadLogRecords: negatableFlag(rawOpts.createPayloadLogRecords),
       disableTelemetryLogCollection: rawOpts.disableTelemetryLogCollection,
       requestTimeoutMs: rawOpts.requestTimeoutMs,
       maskRules: rawOpts.maskRules,
@@ -321,7 +328,11 @@ program
     process.env.DASH0_ENDPOINT,
   )
   .option("-t, --token <token>", "Dash0 auth token", process.env.DASH0_TOKEN)
-  .option("--token-secret-arn <arn>", "Secrets Manager ARN holding the token")
+  .option(
+    "--token-secret-arn <arn>",
+    "Secrets Manager ARN holding the token",
+    process.env.DASH0_TOKEN_SECRET_ARN,
+  )
   .option("-d, --dataset <name>", "Dash0 dataset")
   .option(
     "-c, --concurrency <n>",
@@ -472,11 +483,27 @@ function parseJsonArray(raw: string): string[] {
 }
 
 // ─────────────────────────── main ───────────────────────────
-program.parseAsync(process.argv).catch((err) => {
-  if (err instanceof CliError) {
-    fail(err.message);
-    process.exit(err.exitCode);
+/**
+ * Only auto-run when invoked as the binary, not when imported (e.g. by
+ * tests inspecting option wiring). realpathSync resolves the npm bin
+ * symlink so the comparison still holds for a globally-installed CLI.
+ */
+function isDirectRun(): boolean {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(process.argv[1]) === fileURLToPath(import.meta.url);
+  } catch {
+    return false;
   }
-  fail(err instanceof Error ? err.message : String(err));
-  process.exit(1);
-});
+}
+
+if (isDirectRun()) {
+  program.parseAsync(process.argv).catch((err) => {
+    if (err instanceof CliError) {
+      fail(err.message);
+      process.exit(err.exitCode);
+    }
+    fail(err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  });
+}
