@@ -1,6 +1,6 @@
 {
   "name": "dash0-lambda-cli",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "description": "Unofficial full-screen TUI for managing the Dash0 Lambda extension across AWS Lambda functions. Not affiliated with Dash0 Inc.",
   "author": "Barry Solomon",
   "license": "Apache-2.0",
