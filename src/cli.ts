@@ -497,10 +497,20 @@ function parseJsonArray(raw: string): string[] {
 // ─────────────────────────── main ───────────────────────────
 /**
  * Only auto-run when invoked as the binary, not when imported (e.g. by
- * tests inspecting option wiring). realpathSync resolves the npm bin
- * symlink so the comparison still holds for a globally-installed CLI.
+ * tests inspecting option wiring).
+ *
+ * Bun single-file executables (our primary distribution artifact) mount the
+ * source in a virtual filesystem at /$bunfs/..., so process.argv[1] can't be
+ * realpath'd — realpathSync throws ENOENT and the old comparison always
+ * returned false, leaving the compiled binary inert. import.meta.main is the
+ * reliable signal there (Bun always sets it; Node exposes it from v24). We
+ * keep the realpathSync comparison as the fallback for Node < 24, where it
+ * still resolves the npm bin symlink for a globally-installed CLI.
  */
 function isDirectRun(): boolean {
+  const metaMain = (import.meta as { main?: boolean }).main;
+  if (typeof metaMain === "boolean") return metaMain;
+
   if (!process.argv[1]) return false;
   try {
     return realpathSync(process.argv[1]) === fileURLToPath(import.meta.url);

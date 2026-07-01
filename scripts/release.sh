@@ -108,7 +108,36 @@ for entry in "${TARGETS[@]}"; do
   ls -lh "${out}"
 done
 
-# ── 3. Checksums ─────────────────────────────────────────────────────
+# ── 3. Smoke-test the host-native binary ─────────────────────────────
+
+# Cross-compiled binaries can't run here, but the one matching this host
+# can — and must. A compiled binary that silently does nothing (e.g. an
+# entry-point guard that misfires under Bun's virtual filesystem) would
+# otherwise ship undetected. Assert it prints its own version.
+echo ""
+echo "── smoke test (host-native binary) ──────────────────"
+case "$(uname -s)-$(uname -m)" in
+  Darwin-arm64)              HOST_SUFFIX="darwin-arm64" ;;
+  Darwin-x86_64)             HOST_SUFFIX="darwin-x64" ;;
+  Linux-x86_64)              HOST_SUFFIX="linux-x64" ;;
+  Linux-aarch64|Linux-arm64) HOST_SUFFIX="linux-arm64" ;;
+  *)                         HOST_SUFFIX="" ;;
+esac
+
+if [[ -z "${HOST_SUFFIX}" ]]; then
+  echo "⚠ unknown host $(uname -s)-$(uname -m); skipping binary smoke test"
+else
+  HOST_BIN="${OUTDIR}/dash0-lambda-${VERSION}-${HOST_SUFFIX}"
+  GOT="$("${HOST_BIN}" --version 2>&1 || true)"
+  if [[ "${GOT}" != *"${VERSION}"* ]]; then
+    echo "✘ smoke test failed: '${HOST_BIN} --version' printed '${GOT}', expected to contain '${VERSION}'" >&2
+    echo "  The compiled binary is not running the CLI — refusing to publish a broken release." >&2
+    exit 1
+  fi
+  echo "✔ ${HOST_SUFFIX} binary reports version ${GOT}"
+fi
+
+# ── 4. Checksums ─────────────────────────────────────────────────────
 
 echo ""
 echo "── checksums ────────────────────────────────────────"
@@ -118,13 +147,12 @@ echo "── checksums ───────────────────
   shasum -a 256 -- * | tee SHASUMS256.txt
 )
 
-# ── 4. Summary ───────────────────────────────────────────────────────
+# ── 5. Summary ───────────────────────────────────────────────────────
 
 echo ""
 echo "✔ Release artifacts in ${OUTDIR}/"
 ls -lh "${OUTDIR}"
 echo ""
 echo "Next steps:"
-echo "  - Smoke-test at least one binary on the matching platform."
 echo "  - Tag the release: git tag v${VERSION} && git push --tags"
 echo "  - Upload to GitHub Releases (or your distribution channel)."
