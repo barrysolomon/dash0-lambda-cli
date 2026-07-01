@@ -29,7 +29,9 @@ import {
 } from "../lib/layers.js";
 import { c, fail, info, ok, warn } from "../lib/output.js";
 import {
+  grantSecretAccessToRole,
   inspectSecret,
+  isCustomerManagedSecretsKey,
   simulateLambdaSecretAccess,
   type InspectSecretResult,
 } from "../lib/secrets.js";
@@ -48,6 +50,13 @@ export interface ValidateOptions {
    * read it. Defaults to true.
    */
   checkSecret?: boolean;
+  /**
+   * When the role can't read the secret, attach the least-privilege
+   * secret-read inline policy to the function's execution role (the same
+   * grant `install` performs). Opt-in — a plain validate run never writes
+   * IAM. Surfaced as --fix-secret-access.
+   */
+  fixSecretAccess?: boolean;
   /**
    * Print the resolved token (from DASH0_TOKEN or by reading the secret).
    * Redacted by default; pass revealToken=true for the full value.
@@ -299,14 +308,53 @@ export async function validate(opts: ValidateOptions): Promise<ValidateResult> {
           secretArn: arn,
           kmsKeyArn: secretInspect.kmsKeyId,
         });
-        if (sim.inconclusive) {
+
+        if (sim.allowed) {
+          checks.push({
+            name: "secret-iam",
+            level: "ok",
+            message: "function role can read the secret (and decrypt CMK)",
+          });
+        } else if (opts.fixSecretAccess) {
+          // Denied or inconclusive, and the operator asked us to remediate.
+          // Attach the same least-privilege inline policy install would.
+          const kmsKeyArn = isCustomerManagedSecretsKey(secretInspect.kmsKeyId)
+            ? secretInspect.kmsKeyId
+            : undefined;
+          const grant = await grantSecretAccessToRole({
+            region: opts.region,
+            roleArn: fn.role,
+            secretArn: arn,
+            kmsKeyArn,
+          });
+          if (grant.granted) {
+            checks.push({
+              name: "secret-iam",
+              level: "ok",
+              message: `granted ${grant.actions.join(" + ")} to role ${grant.roleName} (inline policy ${grant.policyName}); role previously lacked access`,
+            });
+          } else if (grant.errorCode === "AccessDenied") {
+            checks.push({
+              name: "secret-iam",
+              level: "fail",
+              message: `tried to remediate but your credentials lack iam:PutRolePolicy on role ${grant.roleName}`,
+              fix: `apply this inline policy to the role by hand:\n${grant.policyDocument}`,
+            });
+          } else {
+            checks.push({
+              name: "secret-iam",
+              level: "fail",
+              message: `remediation failed (${grant.errorCode ?? "Unknown"}): ${grant.errorMessage ?? ""}`,
+            });
+          }
+        } else if (sim.inconclusive) {
           checks.push({
             name: "secret-iam",
             level: "warn",
             message: `couldn't simulate role access (${sim.reason ?? "unknown"})`,
-            fix: "your CLI creds probably lack iam:SimulatePrincipalPolicy; if your function fails to read the secret, attach a policy granting secretsmanager:GetSecretValue on the ARN to the function role",
+            fix: "your CLI creds probably lack iam:SimulatePrincipalPolicy; re-run with --fix-secret-access to attach the secret-read policy, or grant secretsmanager:GetSecretValue on the ARN to the function role manually",
           });
-        } else if (!sim.allowed) {
+        } else {
           const denied = sim.decisions
             .filter((d) => d.decision !== "allowed")
             .map((d) => `${d.action}=${d.decision}`)
@@ -315,16 +363,10 @@ export async function validate(opts: ValidateOptions): Promise<ValidateResult> {
             name: "secret-iam",
             level: "fail",
             message: `function role ${fn.role} cannot ${denied}`,
-            fix: `attach a policy granting ${sim.decisions
+            fix: `re-run with --fix-secret-access to attach a policy granting ${sim.decisions
               .filter((d) => d.decision !== "allowed")
               .map((d) => d.action)
               .join(" + ")} on ${arn}${secretInspect.kmsKeyId ? ` and ${secretInspect.kmsKeyId}` : ""} — or set DASH0_TOKEN directly`,
-          });
-        } else {
-          checks.push({
-            name: "secret-iam",
-            level: "ok",
-            message: "function role can read the secret (and decrypt CMK)",
           });
         }
       }

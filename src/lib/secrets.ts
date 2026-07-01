@@ -20,6 +20,7 @@ import {
 } from "@aws-sdk/client-secrets-manager";
 import {
   IAMClient,
+  PutRolePolicyCommand,
   SimulatePrincipalPolicyCommand,
 } from "@aws-sdk/client-iam";
 
@@ -108,6 +109,29 @@ export async function saveTokenToSecret(
     key: shape === "json" ? key : undefined,
     created: true,
   };
+}
+
+/**
+ * Best-effort DescribeSecret purely to learn the encryption key. Returns
+ * the KmsKeyId (which may be an alias, a key id, or a full ARN depending
+ * on how the secret was configured) or undefined. Never throws — folds
+ * any AWS error to undefined so callers on the grant path degrade to the
+ * "assume default AWS-managed key" branch.
+ */
+export async function describeSecretKms(opts: {
+  region: string;
+  arn: string;
+  client?: SecretsManagerClient;
+}): Promise<string | undefined> {
+  const sm = opts.client ?? new SecretsManagerClient({ region: opts.region });
+  try {
+    const desc = await sm.send(
+      new DescribeSecretCommand({ SecretId: opts.arn }),
+    );
+    return desc.KmsKeyId;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Read the token back from Secrets Manager — used by `validate` etc. */
@@ -317,4 +341,182 @@ export async function simulateLambdaSecretAccess(opts: {
       reason: (err as Error).message,
     };
   }
+}
+
+/** Inline policy name attached to a function's execution role by this CLI. */
+export const SECRET_READ_POLICY_NAME = "dash0-lambda-cli-secret-read";
+
+/**
+ * Parse the RoleName out of an IAM role ARN. PutRolePolicy wants the bare
+ * name (no path), so for a path-scoped role
+ * (arn:aws:iam::111:role/service-role/Foo) we return the final segment
+ * ("Foo"). Returns "" when the ARN isn't a role ARN, so the caller can
+ * fold it into an InvalidRole result rather than making a doomed AWS call.
+ */
+export function roleNameFromArn(roleArn: string): string {
+  const marker = ":role/";
+  const idx = roleArn.indexOf(marker);
+  if (idx === -1) return "";
+  const pathAndName = roleArn.slice(idx + marker.length);
+  return pathAndName.split("/").filter(Boolean).pop() ?? "";
+}
+
+/**
+ * Whether a DescribeSecret KmsKeyId denotes a *customer-managed* key that
+ * the function's role must be granted kms:Decrypt on. The default
+ * AWS-managed Secrets Manager key (absent, or the aws/secretsmanager
+ * alias) grants decrypt implicitly via the secretsmanager service, so
+ * those cases return false — no extra kms statement needed.
+ */
+export function isCustomerManagedSecretsKey(kmsKeyId?: string): boolean {
+  const v = (kmsKeyId ?? "").trim();
+  if (v === "") return false;
+  if (v === "alias/aws/secretsmanager") return false;
+  if (v.endsWith(":alias/aws/secretsmanager")) return false;
+  return true;
+}
+
+export interface GrantSecretAccessOptions {
+  region: string;
+  /** The Lambda function's execution role ARN. */
+  roleArn: string;
+  /** The Secrets Manager ARN the function reads its token from. */
+  secretArn: string;
+  /**
+   * A customer-managed KMS key ARN/id when the secret is encrypted with a
+   * CMK. Omit for the default AWS-managed key. When set, kms:Decrypt is
+   * added to the granted policy.
+   */
+  kmsKeyArn?: string;
+  /** Inline policy name. Default: SECRET_READ_POLICY_NAME. */
+  policyName?: string;
+  /** Plan only — build the policy but don't call PutRolePolicy. */
+  dryRun?: boolean;
+  /** Inject an IAM client (for tests). */
+  client?: IAMClient;
+}
+
+export interface GrantSecretAccessResult {
+  /** True only when PutRolePolicy actually succeeded. */
+  granted: boolean;
+  roleName: string;
+  policyName: string;
+  /** The IAM actions the policy grants. */
+  actions: string[];
+  /** The JSON policy document — always returned so it can be applied by hand. */
+  policyDocument: string;
+  /** Set when dry-run planned the grant instead of applying it. */
+  skipped?: "dry-run";
+  errorCode?: "AccessDenied" | "InvalidRole" | "Unknown";
+  errorMessage?: string;
+}
+
+/**
+ * Attach a least-privilege inline policy to the function's execution role
+ * so it can read (and, for a CMK, decrypt) its Dash0 token secret.
+ *
+ * PutRolePolicy is an upsert, so this is idempotent: re-running install
+ * simply overwrites the same-named policy with an identical document.
+ *
+ * Never throws. IAM failures (most commonly the caller lacking
+ * iam:PutRolePolicy) fold into the result so the enclosing install can
+ * warn and continue rather than leaving the function half-configured.
+ */
+export async function grantSecretAccessToRole(
+  opts: GrantSecretAccessOptions,
+): Promise<GrantSecretAccessResult> {
+  const policyName = opts.policyName ?? SECRET_READ_POLICY_NAME;
+  const roleName = roleNameFromArn(opts.roleArn);
+  const actions = ["secretsmanager:GetSecretValue"];
+
+  const statements: Array<Record<string, unknown>> = [
+    {
+      Sid: "Dash0ReadTokenSecret",
+      Effect: "Allow",
+      Action: ["secretsmanager:GetSecretValue"],
+      Resource: opts.secretArn,
+    },
+  ];
+
+  if (opts.kmsKeyArn) {
+    actions.push("kms:Decrypt");
+    // A full key ARN can be scoped directly. An alias/key-id can't be a
+    // policy Resource, so scope kms:Decrypt to "*" but constrain it to the
+    // Secrets Manager service in this region via kms:ViaService.
+    const isKeyArn = /^arn:aws:kms:.*:key\//.test(opts.kmsKeyArn);
+    statements.push(
+      isKeyArn
+        ? {
+            Sid: "Dash0DecryptTokenSecret",
+            Effect: "Allow",
+            Action: ["kms:Decrypt"],
+            Resource: opts.kmsKeyArn,
+          }
+        : {
+            Sid: "Dash0DecryptTokenSecret",
+            Effect: "Allow",
+            Action: ["kms:Decrypt"],
+            Resource: "*",
+            Condition: {
+              StringEquals: {
+                "kms:ViaService": `secretsmanager.${opts.region}.amazonaws.com`,
+              },
+            },
+          },
+    );
+  }
+
+  const policyDocument = JSON.stringify({
+    Version: "2012-10-17",
+    Statement: statements,
+  });
+
+  const base: GrantSecretAccessResult = {
+    granted: false,
+    roleName,
+    policyName,
+    actions,
+    policyDocument,
+  };
+
+  if (!roleName) {
+    return {
+      ...base,
+      errorCode: "InvalidRole",
+      errorMessage: `could not parse a role name from "${opts.roleArn}"`,
+    };
+  }
+
+  if (opts.dryRun) {
+    return { ...base, skipped: "dry-run" };
+  }
+
+  const iam = opts.client ?? new IAMClient({ region: opts.region });
+  try {
+    await iam.send(
+      new PutRolePolicyCommand({
+        RoleName: roleName,
+        PolicyName: policyName,
+        PolicyDocument: policyDocument,
+      }),
+    );
+    return { ...base, granted: true };
+  } catch (err) {
+    return {
+      ...base,
+      errorCode: classifyIamError(err),
+      errorMessage: (err as Error).message,
+    };
+  }
+}
+
+function classifyIamError(
+  err: unknown,
+): "AccessDenied" | "InvalidRole" | "Unknown" {
+  const e = err as { name?: string; Code?: string };
+  const code = e.name ?? e.Code ?? "";
+  if (code === "AccessDeniedException") return "AccessDenied";
+  if (code === "NoSuchEntityException" || code === "NoSuchEntity")
+    return "InvalidRole";
+  return "Unknown";
 }

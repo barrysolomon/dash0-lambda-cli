@@ -344,7 +344,7 @@ async function maybeSaveDefaults(opts: PersistOptions): Promise<void> {
       tokenSecretArn = r.arn;
       if (r.shape === "json") tokenSecretKey = r.key;
       info(
-        "Don't forget to grant secretsmanager:GetSecretValue on this ARN to the function's IAM role.",
+        "install will grant secretsmanager:GetSecretValue on this ARN to the function's execution role automatically.",
       );
     } catch (err) {
       warn(
