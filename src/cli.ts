@@ -87,6 +87,10 @@ program
       "Pin auth mode and clear the other env var on the function (token wins silently if both are set)",
     ).choices(["token", "secret"]),
   )
+  .option(
+    "--no-grant-secret-access",
+    "With secret auth, don't attach the secretsmanager:GetSecretValue policy to the function's execution role",
+  )
   // Common
   .option("-d, --dataset <name>", "Routes telemetry to a Dash0 dataset")
   .option(
@@ -203,6 +207,9 @@ program
       family: rawOpts.family as RuntimeFamily | undefined,
       layerVersion: rawOpts.layerVersion,
       layerOwner: rawOpts.layerOwner,
+      // Commander sets grantSecretAccess=true unless --no-grant-secret-access
+      // is passed. Only relevant when installing with secret auth.
+      grantSecretAccess: rawOpts.grantSecretAccess,
       dryRun: rawOpts.dryRun,
     });
   });
@@ -254,6 +261,10 @@ program
     "Print the resolved token (redacted) — pass --reveal-token to see it in full",
   )
   .option("--reveal-token", "When --show-token is set, print the full token")
+  .option(
+    "--fix-secret-access",
+    "If the function role can't read its token secret, attach the secretsmanager:GetSecretValue policy to it (writes IAM)",
+  )
   .action(async (rawOpts) => {
     const result = await validate({
       function: rawOpts.function,
@@ -262,6 +273,7 @@ program
       logsLookbackMs: rawOpts.logsLookback,
       layerOwner: rawOpts.layerOwner,
       checkSecret: rawOpts.checkSecret,
+      fixSecretAccess: rawOpts.fixSecretAccess,
       showToken: rawOpts.showToken,
       revealToken: rawOpts.revealToken,
     });

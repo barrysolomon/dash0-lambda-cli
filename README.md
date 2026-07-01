@@ -234,9 +234,18 @@ Two ways to give the extension your Dash0 token:
 1. **Plain env var** — `--token auth_xxx`. Easy, but the token sits in the
    function's environment configuration in plaintext.
 2. **Secrets Manager** — `--token-secret-arn arn:aws:secretsmanager:...`. The
-   extension fetches the secret at cold start. Requires the function role
-   to have `secretsmanager:GetSecretValue` on that ARN. If your secret
+   extension fetches the secret at cold start. The function role needs
+   `secretsmanager:GetSecretValue` on that ARN — `install` attaches a
+   least-privilege inline policy (`dash0-lambda-cli-secret-read`) to the
+   function's execution role automatically, adding `kms:Decrypt` when the
+   secret is encrypted with a customer-managed KMS key. Pass
+   `--no-grant-secret-access` to skip the IAM write (e.g. when your CLI
+   credentials lack `iam:PutRolePolicy` and IAM is managed separately); the
+   command then prints the exact policy to apply by hand. If your secret
    stores a JSON object, also pass `--token-secret-key dash0_token`.
+   If a role's access drifts later, `validate --fix-secret-access` attaches
+   the same policy on demand (a plain `validate` run only reports the gap and
+   never writes IAM).
 
 If both `DASH0_TOKEN` and `DASH0_TOKEN_SECRET_ARN` are set on the function,
 the extension uses `DASH0_TOKEN`. The CLI's `validate` command warns when
