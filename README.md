@@ -111,8 +111,8 @@ feel like, but for managing the Dash0 Lambda extension.
 
     name                                  runtime         dash0          lumigo    endpoint
     ❯ ErrorLogWith400                     nodejs18.x      —              yes       —
-    ● orders-create                       nodejs20.x      v11/node        —         https://ingress.us-…
-    ● orders-charge                       nodejs20.x      v11/node        —         https://ingress.us-…
+    ● orders-create                       nodejs20.x      v20/node        —         https://ingress.us-…
+    ● orders-charge                       nodejs20.x      v20/node        —         https://ingress.us-…
       payments-refund                     python3.12      —              yes       —
 
 ╭ ↑↓ nav   / filter   ␣ select   i install   v validate   u uninstall   o open   r refresh   esc back        a profile   R region   ? help   q quit ╮
@@ -174,6 +174,7 @@ Every other extension knob is opt-in via a flag.
 | `validate` (`doctor`)    | Health-check a function's wiring; nonzero exit on failure                   |
 | `list` (`status`)        | List functions in a region; columns: dash0, lumigo, endpoint, dataset       |
 | `migrate`                | Replace Lumigo with Dash0 (single function or `--filter REGEX`)             |
+| `remove-lumigo`          | Untrace Lumigo: remove its layer, `LUMIGO_*` env vars, and exec wrapper     |
 | `switch`                 | Toggle a function between Dash0 and Lumigo by changing `AWS_LAMBDA_EXEC_WRAPPER` |
 | `generate <flavor>`      | Emit IaC snippets: `terraform`, `sam`, `cdk-ts`, `serverless`               |
 | `menu`                   | Launch the full-screen interactive TUI (default when no subcommand given)   |
@@ -189,7 +190,36 @@ aws lambda list-functions --region us-west-2 --query 'Functions[?contains(Layers
 
 # Flip a function from Dash0 → Lumigo (both layers must be attached):
 ./dash0-lambda switch -f orders-create -r us-west-2 --to lumigo --dry-run
+
+# Untrace Lumigo from one function (layer + LUMIGO_* env + exec wrapper):
+./dash0-lambda remove-lumigo -f orders-create -r us-west-2 --dry-run
+
+# ...or across a fleet. --filter is a REGEX over function names, not a glob:
+./dash0-lambda remove-lumigo --filter '^orders-' -r us-west-2 --concurrency 4 --yes
 ```
+
+### Decommissioning Lumigo
+
+Three commands touch Lumigo, and they do different things:
+
+| Command         | Lumigo layer | Dash0 layer     | Use when                                      |
+| --------------- | ------------ | --------------- | --------------------------------------------- |
+| `install`       | left alone   | added           | Adding Dash0; both vendors end up attached    |
+| `switch`        | left alone   | left alone      | Both attached; flip which one is active       |
+| `migrate`       | removed      | added           | One-shot Lumigo → Dash0 swap, atomically      |
+| `remove-lumigo` | removed      | left alone      | Decommissioning Lumigo after you've moved off |
+
+`remove-lumigo` clears `AWS_LAMBDA_EXEC_WRAPPER` **only** when it points at a
+Lumigo wrapper. A function already switched to Dash0 carries `/opt/wrapper`,
+and that is preserved — untracing Lumigo can never un-instrument Dash0.
+
+`--keep-env` preserves the `LUMIGO_*` env vars while still removing the layer.
+Note this leaves `LUMIGO_TRACER_TOKEN` on the function with nothing reading it;
+the command warns when you do this.
+
+Safety rails on the bulk path: `--filter` prints a per-function plan first, and
+in a non-interactive session it refuses to apply without `--yes`. A single
+`-f` run applies immediately, matching `uninstall`.
 
 ## TUI hotkey reference
 
@@ -305,7 +335,7 @@ mapping (run `dash0-lambda install --help` for descriptions):
 
 By default the CLI looks up layers in account `115813213817` (the canonical
 Dash0 publisher) at the version pinned in
-[`src/lib/layers.ts`](src/lib/layers.ts) (currently **v11** for every family).
+[`src/lib/layers.ts`](src/lib/layers.ts) (currently **v20** for every family).
 The CLI does **not** call `lambda:ListLayerVersions` by default — the
 canonical Dash0 layers grant you `GetLayerVersion` (so you can attach them)
 but not List, so dynamic version discovery would fail with AccessDenied for

@@ -21,6 +21,7 @@ import { Command, Option } from "commander";
 import pkg from "../package.json" with { type: "json" };
 import { install } from "./commands/install.js";
 import { uninstall } from "./commands/uninstall.js";
+import { removeLumigo } from "./commands/removeLumigo.js";
 import { validate } from "./commands/validate.js";
 import { list } from "./commands/list.js";
 import { migrate } from "./commands/migrate.js";
@@ -230,6 +231,32 @@ program
       function: rawOpts.function,
       region: rawOpts.region,
       clearWrapper: rawOpts.clearWrapper,
+      dryRun: rawOpts.dryRun,
+    });
+  });
+
+// ─────────────────────────── remove-lumigo ───────────────────────────
+program
+  .command("remove-lumigo")
+  .alias("untrace-lumigo")
+  .description(
+    "Remove the Lumigo layer, LUMIGO_* env vars, and Lumigo exec wrapper",
+  )
+  .option("-f, --function <name>", "Lambda function name or ARN")
+  .option("--filter <regex>", "Regex over function names (bulk mode)")
+  .requiredOption("-r, --region <region>", "AWS region", process.env.AWS_REGION)
+  .option("--keep-env", "Preserve LUMIGO_* env vars (still removes the layer)")
+  .option("--concurrency <n>", "Parallel updates in bulk mode", "4")
+  .option("-y, --yes", "Skip the confirmation prompt (required for --filter in CI)")
+  .option("--dry-run", "Print plan without applying")
+  .action(async (rawOpts) => {
+    await removeLumigo({
+      function: rawOpts.function,
+      filter: rawOpts.filter,
+      region: rawOpts.region,
+      keepEnv: rawOpts.keepEnv,
+      concurrency: Number(rawOpts.concurrency),
+      yes: rawOpts.yes,
       dryRun: rawOpts.dryRun,
     });
   });

@@ -23,6 +23,7 @@ import { configToEnv, Dash0InstallConfigSchema } from "../lib/env.js";
 import { buildMigrationPlan, hasLumigoFootprint } from "../lib/lumigo.js";
 import { ValidationError, asCliError } from "../lib/errors.js";
 import { c, fail, info, ok, warn } from "../lib/output.js";
+import { confirm } from "../lib/prompt.js";
 
 export interface MigrateOptions {
   region: string;
@@ -203,16 +204,3 @@ async function selectTargets(
   return matches;
 }
 
-async function confirm(prompt: string): Promise<boolean> {
-  process.stdout.write(`${prompt} [y/N] `);
-  return new Promise((resolve) => {
-    const onData = (chunk: Buffer) => {
-      const ans = chunk.toString().trim().toLowerCase();
-      process.stdin.off("data", onData);
-      process.stdin.pause();
-      resolve(ans === "y" || ans === "yes");
-    };
-    process.stdin.resume();
-    process.stdin.on("data", onData);
-  });
-}
