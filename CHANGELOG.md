@@ -5,7 +5,14 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.14.0] — 2026-08-14
+## [0.20.0] — 2026-08-14
+
+> **Versioning change.** From this release the CLI's **minor version tracks the
+> Dash0 extension layer version it pins by default**: `dash0-lambda 0.20.x`
+> installs `dash0-extension-*:20`. Read one number off `--version` and you know
+> what your fleet gets. The jump from 0.13 to 0.20 is that alignment, not
+> seven releases of changes. A test asserts the two stay in step, so bumping
+> the layer pin without bumping the package version now fails CI.
 
 ### ⚠️ Action required if you ran `migrate --token-secret-arn` on v0.13.0 or earlier
 
@@ -75,7 +82,7 @@ Functions migrated with a plaintext `--token` are unaffected.
 ### Changed
 
 - Pinned layer version bumped from **v11 to v20** across all four runtime
-  families (node, python, java, manual). Verified against live AWS: all four
+  families (node, python, java, manual) — and the package version now tracks it. Verified against live AWS: all four
   families exist at `:20`, and `dash0-extension-node:20` is present in all 16
   supported regions.
 

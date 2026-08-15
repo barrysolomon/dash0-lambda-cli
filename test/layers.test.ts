@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import {
   buildLayerArn,
@@ -112,5 +113,36 @@ describe("buildLayerName + wrapperPathFor", () => {
     expect(wrapperPathFor("python")).toBe("/opt/wrapper");
     expect(wrapperPathFor("java")).toBe("/opt/wrapper");
     expect(wrapperPathFor("manual")).toBeNull();
+  });
+});
+
+/**
+ * Versioning policy: the CLI's MINOR version tracks the Dash0 extension layer
+ * version it pins by default. `dash0-lambda 0.20.x` installs
+ * `dash0-extension-*:20`, so an operator can read one number off `--version`
+ * and know what their fleet will get — no cross-referencing a changelog.
+ *
+ * This is a tripwire, not a computation. Bumping the layer pin means bumping
+ * the package minor in the same commit, deliberately.
+ */
+describe("CLI version tracks the pinned layer version", () => {
+  it("package.json minor === KNOWN_LATEST_LAYER_VERSION", async () => {
+    const pkg = JSON.parse(
+      await readFile(
+        new URL("../package.json", import.meta.url),
+        "utf8",
+      ),
+    ) as { version: string };
+    const minor = Number(pkg.version.split(".")[1]);
+
+    expect(minor).toBe(KNOWN_LATEST_LAYER_VERSION.node);
+  });
+
+  it("all four runtime families are pinned to the same version", () => {
+    // The policy only has one number to track if the families never diverge.
+    // If Dash0 ever ships them out of step, this fails and the policy needs a
+    // conscious rethink rather than a silently-wrong --version.
+    const versions = new Set(Object.values(KNOWN_LATEST_LAYER_VERSION));
+    expect([...versions]).toHaveLength(1);
   });
 });
