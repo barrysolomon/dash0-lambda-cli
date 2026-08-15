@@ -4,6 +4,13 @@
  */
 
 import kleur from "kleur";
+// Static import, deliberately. This package is "type": "module", so a lazy
+// `require("yaml")` is a ReferenceError under Node's ESM loader — and Vitest's
+// CJS interop shim hides that from the test suite (see esm-integrity.test.ts).
+// A dynamic import() would keep it lazy but force emit() to become async, and
+// it wouldn't be statically resolvable by Bun's bundler for the single-file
+// binary. Parsing `yaml` at startup is noise next to the AWS SDK.
+import YAML from "yaml";
 
 export const c = kleur;
 
@@ -68,9 +75,6 @@ export function emit(
     return;
   }
   if (format === "yaml") {
-    // Lazy require so we don't pay the parse cost when not needed.
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const YAML = require("yaml");
     console.log(YAML.stringify(data));
     return;
   }

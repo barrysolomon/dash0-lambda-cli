@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Node is the canonical toolchain (CLAUDE.md). 20 is the floor the package
+  # declares — AWS SDK v3 dropped 18 — and 22 is what most contributors run.
+  test:
+    name: node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["20", "22"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install (locked)
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+      # esm-integrity.test.ts spawns real `node` processes against dist/ to
+      # catch CommonJS-isms that Vitest's interop shim hides. It builds on its
+      # own, but the step above means it starts from a warm dist/.
+      - name: Test
+        run: npm test
+
+      - name: Smoke — every subcommand renders its help
+        run: |
+          set -euo pipefail
+          for cmd in install uninstall remove-lumigo untrace-lumigo validate \
+                     doctor list status migrate update switch generate; do
+            node dist/cli.js "$cmd" --help > /dev/null
+            echo "  ok  $cmd"
+          done
+          node dist/cli.js secret show --help > /dev/null && echo "  ok  secret show"
+          node dist/cli.js --help > /dev/null && echo "  ok  --help"
+          test "$(node dist/cli.js --version)" = "$(node -p 'require("./package.json").version')"
+          echo "  ok  --version matches package.json"
+
+  # The release artifacts are Bun single-file executables, and Bun's module
+  # resolution is NOT Node's — it tolerates CommonJS in ESM where Node throws.
+  # A green Node job therefore does not prove the shipped binary works, so
+  # build and run one here. Mirrors the smoke test in scripts/release.sh.
+  binary:
+    name: bun standalone binary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: npm ci
+
+      - name: Compile
+        run: |
+          bun build src/cli.ts --compile --target=bun-linux-x64 \
+            --outfile ./dash0-lambda-bin
+          chmod +x ./dash0-lambda-bin
+
+      - name: Smoke — the binary is not inert
+        run: |
+          set -euo pipefail
+          EXPECTED="$(node -p 'require("./package.json").version')"
+          GOT="$(./dash0-lambda-bin --version)"
+          test "$GOT" = "$EXPECTED" || {
+            echo "binary printed '$GOT', expected '$EXPECTED'" >&2; exit 1; }
+          ./dash0-lambda-bin --help > /dev/null
+          ./dash0-lambda-bin switch --help > /dev/null
+          echo "ok — binary reports $GOT and renders help"
