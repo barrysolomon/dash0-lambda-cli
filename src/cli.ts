@@ -382,6 +382,10 @@ program
   .option("--layer-version <n>", "Pin a layer version", parseInt)
   .option("--layer-owner <account>", "Override the layer publisher account")
   .option("-y, --yes", "Skip the confirmation prompt")
+  .option(
+    "--no-grant-secret-access",
+    "Skip granting the execution role read access to the token secret",
+  )
   .option("--dry-run", "Print plan without applying")
   .action(async (rawOpts) => {
     let token = rawOpts.token as string | undefined;
@@ -400,6 +404,8 @@ program
       tokenSecretArn: rawOpts.tokenSecretArn,
       dataset: rawOpts.dataset,
       concurrency: rawOpts.concurrency,
+      // Commander sets grantSecretAccess=true unless --no-grant-secret-access
+      grantSecretAccess: rawOpts.grantSecretAccess,
       layerVersion: rawOpts.layerVersion,
       layerOwner: rawOpts.layerOwner,
       yes: rawOpts.yes,

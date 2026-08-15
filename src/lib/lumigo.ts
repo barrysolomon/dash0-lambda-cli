@@ -103,7 +103,11 @@ export function buildMigrationPlan(
   for (const [k, v] of Object.entries(snapshot.env)) {
     if (k.startsWith(DASH0_ENV_KEYS_PREFIX)) continue;
     if (k === "AWS_LAMBDA_EXEC_WRAPPER") continue; // install owns this
-    if (k === "OTEL_RESOURCE_ATTRIBUTES") continue; // install owns this
+    // OTEL_RESOURCE_ATTRIBUTES is deliberately KEPT. It's an OTel-standard
+    // var a customer may have set themselves (team, tier, deployment env),
+    // not something Lumigo owns — dropping it silently loses their metadata.
+    // configToEnv() is spread after envToKeep, so an explicit
+    // --resource-attribute flag still overrides whatever was there.
     if ((LUMIGO_ENV_KEYS as readonly string[]).includes(k)) continue;
     envToKeep[k] = v;
   }

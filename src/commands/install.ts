@@ -26,9 +26,7 @@ import {
 import { CliError, ValidationError, asCliError } from "../lib/errors.js";
 import { c, fail, info, ok, warn } from "../lib/output.js";
 import {
-  describeSecretKms,
-  grantSecretAccessToRole,
-  isCustomerManagedSecretsKey,
+  maybeGrantSecretAccess,
   type GrantSecretAccessResult,
 } from "../lib/secrets.js";
 import type { IAMClient } from "@aws-sdk/client-iam";
@@ -209,71 +207,6 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
     family,
     secretGrant,
   };
-}
-
-/**
- * Grant the function's role read access to its token secret, when secret
- * auth is in play and the grant hasn't been opted out. Resolves the
- * secret's KMS key so a CMK-encrypted secret also gets kms:Decrypt.
- * Returns undefined when there's nothing to do (token auth, opted out, or
- * no resolvable role).
- */
-async function maybeGrantSecretAccess(args: {
-  secretArn?: string;
-  roleArn: string;
-  region: string;
-  enabled: boolean;
-  dryRun?: boolean;
-  iam?: IAMClient;
-  secretsManager?: SecretsManagerClient;
-}): Promise<GrantSecretAccessResult | undefined> {
-  if (!args.secretArn || !args.enabled) return undefined;
-  if (!args.roleArn) {
-    warn(
-      "Could not determine the function's execution role; skipping the secret-read IAM grant.",
-    );
-    return undefined;
-  }
-
-  const kmsKeyId = await describeSecretKms({
-    region: args.region,
-    arn: args.secretArn,
-    client: args.secretsManager,
-  });
-  const kmsKeyArn = isCustomerManagedSecretsKey(kmsKeyId) ? kmsKeyId : undefined;
-
-  const grant = await grantSecretAccessToRole({
-    region: args.region,
-    roleArn: args.roleArn,
-    secretArn: args.secretArn,
-    kmsKeyArn,
-    dryRun: args.dryRun,
-    client: args.iam,
-  });
-
-  const actions = grant.actions.join(" + ");
-  if (grant.skipped === "dry-run") {
-    info(
-      `Dry-run: would grant ${actions} to role ${grant.roleName} (inline policy ${grant.policyName}).`,
-    );
-  } else if (grant.granted) {
-    ok(
-      `Granted ${actions} to role ${grant.roleName} so it can read the token secret (inline policy ${grant.policyName}).`,
-    );
-  } else if (grant.errorCode === "AccessDenied") {
-    warn(
-      `Couldn't attach the secret-read policy to role ${grant.roleName} — your credentials lack iam:PutRolePolicy.`,
-    );
-    info(
-      `The function needs ${actions} on the secret. Apply this inline policy manually:\n${grant.policyDocument}`,
-    );
-  } else {
-    warn(
-      `Couldn't grant secret access to role ${grant.roleName}: ${grant.errorCode ?? "Unknown"} — ${grant.errorMessage ?? ""}`,
-    );
-  }
-
-  return grant;
 }
 
 function parseConfig(opts: InstallOptions): Dash0InstallConfig {
