@@ -105,3 +105,25 @@ export async function promptDash0Token(): Promise<string> {
     },
   });
 }
+
+/**
+ * Yes/no confirmation on stdin. Defaults to NO on anything but an explicit
+ * y/yes, so an accidental Enter never applies a destructive plan.
+ *
+ * Callers are responsible for the non-interactive case: when stdin isn't a
+ * TTY there's nobody to answer, so commands require an explicit --yes
+ * rather than calling this and hanging forever.
+ */
+export async function confirm(prompt: string): Promise<boolean> {
+  process.stdout.write(`${prompt} [y/N] `);
+  return new Promise((resolve) => {
+    const onData = (chunk: Buffer) => {
+      const ans = chunk.toString().trim().toLowerCase();
+      process.stdin.off("data", onData);
+      process.stdin.pause();
+      resolve(ans === "y" || ans === "yes");
+    };
+    process.stdin.resume();
+    process.stdin.on("data", onData);
+  });
+}

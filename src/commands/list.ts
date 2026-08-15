@@ -62,7 +62,7 @@ export async function list(opts: ListOptions): Promise<ListRow[]> {
       dash0: dash0Tag,
       lumigo:
         lumigo.layers.length + Object.keys(lumigo.env).length > 0 ? "yes" : "—",
-      endpoint: shorten(fn.env.DASH0_ENDPOINT ?? "—", 32),
+      endpoint: fn.env.DASH0_ENDPOINT ?? "—",
       dataset: fn.env.DASH0_DATASET ?? "—",
     });
   }
@@ -72,7 +72,11 @@ export async function list(opts: ListOptions): Promise<ListRow[]> {
   const fmt = opts.format ?? "table";
   if (fmt === "table") {
     console.log(c.bold(`\nLambda functions in ${opts.region}: ${rows.length} match`));
-    emit("table", undefined, rows as unknown as Array<Record<string, unknown>>, [
+    // Truncation is a DISPLAY concern only — it keeps a row inside 120
+    // columns. It must never reach the returned rows or the json/yaml
+    // output, where a "…" turns a URL into a string that isn't one.
+    const displayRows = rows.map((r) => ({ ...r, endpoint: shorten(r.endpoint, 32) }));
+    emit("table", undefined, displayRows as unknown as Array<Record<string, unknown>>, [
       "name",
       "runtime",
       "arch",

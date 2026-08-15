@@ -21,6 +21,7 @@ import { Command, Option } from "commander";
 import pkg from "../package.json" with { type: "json" };
 import { install } from "./commands/install.js";
 import { uninstall } from "./commands/uninstall.js";
+import { removeLumigo } from "./commands/removeLumigo.js";
 import { validate } from "./commands/validate.js";
 import { list } from "./commands/list.js";
 import { migrate } from "./commands/migrate.js";
@@ -234,6 +235,32 @@ program
     });
   });
 
+// ─────────────────────────── remove-lumigo ───────────────────────────
+program
+  .command("remove-lumigo")
+  .alias("untrace-lumigo")
+  .description(
+    "Remove the Lumigo layer, LUMIGO_* env vars, and Lumigo exec wrapper",
+  )
+  .option("-f, --function <name>", "Lambda function name or ARN")
+  .option("--filter <regex>", "Regex over function names (bulk mode)")
+  .requiredOption("-r, --region <region>", "AWS region", process.env.AWS_REGION)
+  .option("--keep-env", "Preserve LUMIGO_* env vars (still removes the layer)")
+  .option("--concurrency <n>", "Parallel updates in bulk mode", "4")
+  .option("-y, --yes", "Skip the confirmation prompt (required for --filter in CI)")
+  .option("--dry-run", "Print plan without applying")
+  .action(async (rawOpts) => {
+    await removeLumigo({
+      function: rawOpts.function,
+      filter: rawOpts.filter,
+      region: rawOpts.region,
+      keepEnv: rawOpts.keepEnv,
+      concurrency: Number(rawOpts.concurrency),
+      yes: rawOpts.yes,
+      dryRun: rawOpts.dryRun,
+    });
+  });
+
 // ─────────────────────────── validate / doctor ───────────────────────────
 program
   .command("validate")
@@ -355,6 +382,10 @@ program
   .option("--layer-version <n>", "Pin a layer version", parseInt)
   .option("--layer-owner <account>", "Override the layer publisher account")
   .option("-y, --yes", "Skip the confirmation prompt")
+  .option(
+    "--no-grant-secret-access",
+    "Skip granting the execution role read access to the token secret",
+  )
   .option("--dry-run", "Print plan without applying")
   .action(async (rawOpts) => {
     let token = rawOpts.token as string | undefined;
@@ -373,6 +404,8 @@ program
       tokenSecretArn: rawOpts.tokenSecretArn,
       dataset: rawOpts.dataset,
       concurrency: rawOpts.concurrency,
+      // Commander sets grantSecretAccess=true unless --no-grant-secret-access
+      grantSecretAccess: rawOpts.grantSecretAccess,
       layerVersion: rawOpts.layerVersion,
       layerOwner: rawOpts.layerOwner,
       yes: rawOpts.yes,

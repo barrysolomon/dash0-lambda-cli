@@ -17,6 +17,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { LambdaWrapper } from "../src/lib/lambda.js";
 import { updateLayer } from "../src/commands/updateLayer.js";
 import { CliError } from "../src/lib/errors.js";
+import { KNOWN_LATEST_LAYER_VERSION } from "../src/lib/layers.js";
 
 const lambdaMock = mockClient(LambdaClient);
 beforeEach(() => lambdaMock.reset());
@@ -24,8 +25,10 @@ afterEach(() => lambdaMock.reset());
 
 const DASH0_OLD =
   "arn:aws:lambda:us-west-2:115813213817:layer:dash0-extension-node:3";
+// Tracks the CLI's pin so a version bump stays a one-line edit in layers.ts.
+// The explicit-value tripwire for the pin itself lives in layers.test.ts.
 const DASH0_CURRENT =
-  "arn:aws:lambda:us-west-2:115813213817:layer:dash0-extension-node:11";
+  `arn:aws:lambda:us-west-2:115813213817:layer:dash0-extension-node:${KNOWN_LATEST_LAYER_VERSION.node}`;
 const CUSTOM_LIB = "arn:aws:lambda:us-west-2:111:layer:custom-libs:7";
 
 function newWrapper() {

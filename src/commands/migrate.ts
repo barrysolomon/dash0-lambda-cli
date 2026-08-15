@@ -23,6 +23,10 @@ import { configToEnv, Dash0InstallConfigSchema } from "../lib/env.js";
 import { buildMigrationPlan, hasLumigoFootprint } from "../lib/lumigo.js";
 import { ValidationError, asCliError } from "../lib/errors.js";
 import { c, fail, info, ok, warn } from "../lib/output.js";
+import { confirm } from "../lib/prompt.js";
+import { maybeGrantSecretAccess } from "../lib/secrets.js";
+import type { IAMClient } from "@aws-sdk/client-iam";
+import type { SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
 
 export interface MigrateOptions {
   region: string;
@@ -39,7 +43,15 @@ export interface MigrateOptions {
   dryRun?: boolean;
   layerVersion?: number;
   layerOwner?: string;
+  /**
+   * Attach the least-privilege secret-read inline policy to each migrated
+   * function's execution role when secret auth is in play. Defaults to on,
+   * matching `install`; set false via --no-grant-secret-access.
+   */
+  grantSecretAccess?: boolean;
   lambda?: LambdaWrapper;
+  iam?: IAMClient;
+  secretsManager?: SecretsManagerClient;
 }
 
 export interface MigrationOutcome {
@@ -158,6 +170,19 @@ export async function migrate(
           env: desiredEnv,
         });
         if (result.applied) {
+          // Secret auth needs the execution role to actually be able to read
+          // the secret, same as install — otherwise the migration looks
+          // successful and the extension fails at runtime with AccessDenied.
+          // Best-effort: never fail a migration on an IAM error.
+          await maybeGrantSecretAccess({
+            secretArn: desiredEnv.DASH0_TOKEN_SECRET_ARN,
+            roleArn: fn.role,
+            region: opts.region,
+            enabled: opts.grantSecretAccess !== false,
+            dryRun: opts.dryRun,
+            iam: opts.iam,
+            secretsManager: opts.secretsManager,
+          });
           ok(`migrated ${fn.functionName}`);
           outcomes.push({ function: fn.functionName, status: "migrated" });
         } else {
@@ -203,16 +228,3 @@ async function selectTargets(
   return matches;
 }
 
-async function confirm(prompt: string): Promise<boolean> {
-  process.stdout.write(`${prompt} [y/N] `);
-  return new Promise((resolve) => {
-    const onData = (chunk: Buffer) => {
-      const ans = chunk.toString().trim().toLowerCase();
-      process.stdin.off("data", onData);
-      process.stdin.pause();
-      resolve(ans === "y" || ans === "yes");
-    };
-    process.stdin.resume();
-    process.stdin.on("data", onData);
-  });
-}

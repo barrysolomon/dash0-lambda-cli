@@ -17,6 +17,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { LambdaWrapper } from "../src/lib/lambda.js";
 import { install } from "../src/commands/install.js";
+import { KNOWN_LATEST_LAYER_VERSION } from "../src/lib/layers.js";
 
 const lambdaMock = mockClient(LambdaClient);
 const iamMock = mockClient(IAMClient);
@@ -62,9 +63,12 @@ describe("install", () => {
     });
 
     expect(r.applied).toBe(true);
-    // KNOWN_LATEST_LAYER_VERSION.node is 9 — pinned in src/lib/layers.ts.
+    // Version comes from KNOWN_LATEST_LAYER_VERSION in src/lib/layers.ts.
+    // The explicit-value tripwire for that constant lives in layers.test.ts;
+    // here we only assert install *uses* it, so the pin bump is a one-liner.
+    const v = KNOWN_LATEST_LAYER_VERSION.node;
     expect(r.layerArn).toBe(
-      "arn:aws:lambda:us-west-2:115813213817:layer:dash0-extension-node:11",
+      `arn:aws:lambda:us-west-2:115813213817:layer:dash0-extension-node:${v}`,
     );
     expect(r.envAfter.DB_URL).toBe("postgres://x"); // preserved
     expect(r.envAfter.DASH0_ENDPOINT).toBe(ENDPOINT);
@@ -80,7 +84,7 @@ describe("install", () => {
     const calls = lambdaMock.commandCalls(UpdateFunctionConfigurationCommand);
     expect(calls).toHaveLength(1);
     const sentLayers = calls[0]!.args[0].input.Layers ?? [];
-    expect(sentLayers[0]).toContain("dash0-extension-node:11");
+    expect(sentLayers[0]).toContain(`dash0-extension-node:${v}`);
   });
 
   it("honors an explicit layerVersion override (pinning to an older release)", async () => {
